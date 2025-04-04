@@ -172,3 +172,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+holdout_data/
+holdout_outputs/
+model/
+ptbxl_output/
+training_data/
+
+
+pythoncodes.txt
