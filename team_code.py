@@ -56,7 +56,7 @@ N_LAYERS=1
 N_HEADS=4
 DROPOUT=0.1
 NUM_CLASSES=2
-EPOCHS = 20
+EPOCHS = 50
 LEARNING_RATE = 0.001
 
 
@@ -132,7 +132,7 @@ class simple_transformer_encoder(nn.Module):
 
 #     return signals.T.astype(np.float32)  # Shape: (seq_length, num_channels)
 
-def load_and_process_signal(record, desired_samping_rate, low_cut = 0.5, high_cut = 45, desired_lenght=7):
+def load_and_process_signal_train(record, desired_samping_rate, low_cut = 0.5, high_cut = 45, desired_lenght=7):
     signals, fields = load_signals(record) #load the data
     # print(fields)
     original_sampling_rate = fields["fs"] #original sampling rate
@@ -165,6 +165,39 @@ def load_and_process_signal(record, desired_samping_rate, low_cut = 0.5, high_cu
     return signals, label   # Shape: (seq_length, num_channels)
 
 
+def load_and_process_signal_test(record, desired_samping_rate, low_cut = 0.5, high_cut = 45, desired_lenght=7):
+    signals, fields = load_signals(record) #load the data
+    # print(fields)
+    original_sampling_rate = fields["fs"] #original sampling rate
+    # label = 1 if "True" in fields["comments"][2] else 0 #label is 1 if the comment contains "TRUE" else 0
+    # label = load_label(record)
+
+    
+    if original_sampling_rate != desired_samping_rate: 
+        num_samples = int(len(signals) * desired_samping_rate / original_sampling_rate)
+        signals = resample(signals, num_samples, axis=0) # Resample the signal
+
+    # Filter the signal
+    signals = filter_data(signals, lowcut=low_cut, highcut=high_cut, fs=desired_samping_rate) # Filter the signal
+
+    signals = np.nan_to_num(signals, nan=0.0) # good for any missing values but probably there wont be any
+
+    signal_length, _  = signals.shape #get the length of the signal
+    
+    total_samples_to_be_considered = desired_samping_rate * desired_lenght #total samples to be considered
+
+    if signal_length > total_samples_to_be_considered: #cut the signal 
+        signals = signals[:total_samples_to_be_considered, :] 
+    elif signal_length < total_samples_to_be_considered: #repeat the signals from the start
+        pad_width = total_samples_to_be_considered - signal_length
+        signals = np.pad(signals, ((0, pad_width), (0, 0)), mode='wrap')
+
+    # change data type to float32 and long
+    signals = signals.astype(np.float32) #change the data type to float32
+    # label = np.array(label).astype(np.long) #change the data type to long    
+    return signals   # Shape: (seq_length, num_channels)
+
+
 class SignalDataset(Dataset):
     def __init__(self, data_folder, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7):
         self.records = find_records(data_folder)
@@ -180,7 +213,7 @@ class SignalDataset(Dataset):
     def __getitem__(self, idx):
         record_path = os.path.join(self.data_folder, self.records[idx])
         #this parameter is fixed for now 
-        signals, label = load_and_process_signal(record_path, 
+        signals, label = load_and_process_signal_train(record_path, 
                                                 desired_samping_rate=self.desired_samping_rate, 
                                                 low_cut=self.low_cut, high_cut=self.high_cut, 
                                                 desired_lenght=self.desired_lenght)
@@ -204,7 +237,7 @@ def train_model(data_folder, model_folder, verbose):
     y_train = []
     for i in range(num_records):
         record = os.path.join(data_folder, records[i])
-        signals, label = load_and_process_signal(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
+        signals, label = load_and_process_signal_train(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
         X_train.append(signals)
         y_train.append(label)
         
@@ -378,24 +411,36 @@ def run_model(record, model, verbose):
     # scaler = model['scaler']
 
     # Extract the features.
+<<<<<<< HEAD
     signals, fields = load_and_process_signal(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
     
+=======
+    signals = load_and_process_signal_test(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
+
+>>>>>>> submission_v3
     if len(signals.shape) > 2:
         signals = model.scaler.transform(signals.reshape(signals.shape[0], -1)).reshape(signals.shape)  
     else:
         signals = model.scaler.transform(signals.reshape(1, -1)).reshape(signals.shape)
     signals = torch.tensor(signals).unsqueeze(0).to(DEVICE)  # shape: (1, seq_length, channels)
     
+
     with torch.no_grad():
         logits = model(signals)
-        probs = F.softmax(logits, dim=1).cpu().numpy()[0]
+        
+        probs = F.softmax(logits, dim=1).cpu().numpy()
+
         pred_class = int(np.argmax(probs))
 
     binary_output = bool(pred_class)
-    probability_output = probs
+    
+    #just atking trh prob for "changas" class
+    probability_output = probs[0,1]
+
+    
     print(f"pred_class: {pred_class}, binary_output: {binary_output}, probability_output: {probability_output}")
 
-    return binary_output, probability_output[pred_class]
+    return binary_output, probability_output
 
 ################################################################################
 #

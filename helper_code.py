@@ -196,6 +196,8 @@ def get_signal_names(string):
 def compute_challenge_score(labels, outputs, max_fraction_positive = 0.05):
     # Check the data.
     assert len(labels) == len(outputs)
+
+ 
     num_instances = len(labels)
     max_num_positive_instances = int(max_fraction_positive * num_instances)
 
@@ -207,6 +209,8 @@ def compute_challenge_score(labels, outputs, max_fraction_positive = 0.05):
     thresholds = np.unique(outputs)
     thresholds = np.append(thresholds, thresholds[-1] + 1)
     thresholds = thresholds[::-1]
+
+
     num_thresholds = len(thresholds)
 
     idx = np.argsort(outputs)[::-1]
