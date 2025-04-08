@@ -34,7 +34,7 @@ def run(args):
         print('Loading the Challenge model...')
 
     # You can use these functions to perform tasks, such as loading your model, that you only need to perform once.
-    model, scaler = load_model(args.model_folder, args.verbose) ### Teams: Implement this function!!!
+    model = load_model(args.model_folder, args.verbose) ### Teams: Implement this function!!!
 
     # Find the Challenge data.
     if args.verbose:
@@ -42,8 +42,6 @@ def run(args):
 
     records = find_records(args.data_folder)
     num_records = len(records)
-
-    
 
     if num_records == 0:
         raise Exception('No data were provided.')
@@ -63,7 +61,7 @@ def run(args):
 
         # Allow or disallow the model to fail on parts of the data; this can be helpful for debugging.
         try:
-            binary_output, probability_output = run_model(os.path.join(args.data_folder, record), model, scaler=scaler, verbose=args.verbose) ### Teams: Implement this function!!!
+            binary_output, probability_output = run_model(os.path.join(args.data_folder, record), model, args.verbose) ### Teams: Implement this function!!!
         except:
             if args.allow_failures:
                 if args.verbose:

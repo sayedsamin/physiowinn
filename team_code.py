@@ -334,11 +334,19 @@ def load_model(model_folder, verbose):
     model.eval()
 
     # Extract the scaler from the checkpoint
-    scaler = checkpoint.get('scaler', None)
-    if scaler is None and verbose:
+    model.scaler = checkpoint.get('scaler', None)
+    if model.scaler is None and verbose:
         print('Scaler not found in the checkpoint.')
 
-    return model, scaler
+    return model
+
+# Change made by samin 
+    # return {
+    #     'model': model,
+    #     'scaler': scaler 
+    # }
+
+
 
 # Run your trained model. This function is *required*. You should edit this function to add your code, but do *not* change the
 # arguments of this function.
@@ -360,13 +368,22 @@ def load_model(model_folder, verbose):
 
 
 # Run inference on raw signals
-def run_model(record, model, scaler, verbose):
+def run_model(record, model, verbose):
+    # print(model)
+    # check data type of model
+
+ 
+    # Load the model.
+    # model = model['model']
+    # scaler = model['scaler']
+
+    # Extract the features.
     signals, fields = load_and_process_signal(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
     
     if len(signals.shape) > 2:
-        signals = scaler.transform(signals.reshape(signals.shape[0], -1)).reshape(signals.shape)  
+        signals = model.scaler.transform(signals.reshape(signals.shape[0], -1)).reshape(signals.shape)  
     else:
-        signals = scaler.transform(signals.reshape(1, -1)).reshape(signals.shape)
+        signals = model.scaler.transform(signals.reshape(1, -1)).reshape(signals.shape)
     signals = torch.tensor(signals).unsqueeze(0).to(DEVICE)  # shape: (1, seq_length, channels)
     
     with torch.no_grad():
@@ -433,3 +450,12 @@ def save_model(model_folder, model, seq_length, num_channels, scaler):
         'num_channels': num_channels,
         'scaler': scaler
     }, os.path.join(model_folder, 'transformer_model.pt'))
+
+# Shyamal's
+# def save_model(model_folder, model, seq_length, num_channels, scaler):
+# torch.save({
+#         'model_state_dict': model.state_dict(),
+#         'seq_length': seq_length,
+#         'num_channels': num_channels,
+#         'scaler': scaler
+#     }, os.path.join(model_folder, 'transformer_model.pt'))

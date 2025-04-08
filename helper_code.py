@@ -132,7 +132,6 @@ def get_sex(string):
 
 # Get the label from a header or a similar string.
 def get_label(string, allow_missing=False):
-    # print(f"string: {string}")
     label, has_label = get_variable(string, label_string)
     if not has_label and not allow_missing:
         raise Exception('No label is available: are you trying to load the labels from the held-out data?')
