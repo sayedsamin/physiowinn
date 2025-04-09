@@ -411,13 +411,12 @@ def run_model(record, model, verbose):
     # scaler = model['scaler']
 
     # Extract the features.
-<<<<<<< HEAD
-    signals, fields = load_and_process_signal(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
+
+    # signals, fields = load_and_process_signal(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
     
-=======
     signals = load_and_process_signal_test(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
 
->>>>>>> submission_v3
+
     if len(signals.shape) > 2:
         signals = model.scaler.transform(signals.reshape(signals.shape[0], -1)).reshape(signals.shape)  
     else:
