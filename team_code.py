@@ -26,7 +26,9 @@ from scipy.signal import butter, lfilter
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score
 import random
-
+# import mne
+import numpy as np
+from scipy.signal import welch
 ################################################################################
 #
 # Required functions. Edit these functions to add your code, but do not change the arguments for the functions.
@@ -198,6 +200,71 @@ def load_and_process_signal_test(record, desired_samping_rate, low_cut = 0.5, hi
     return signals   # Shape: (seq_length, num_channels)
 
 
+def windowing(data, window_size, overlap):
+    # ensure array
+    data = np.asarray(data)
+    n_samples, n_features = data.shape
+
+    if window_size > n_samples:
+        raise ValueError(f"window_size ({window_size}) > n_samples ({n_samples})")
+    if not (0 <= overlap < window_size):
+        raise ValueError(f"overlap must be ≥0 and < window_size ({window_size})")
+
+    step = window_size - overlap
+    # number of full windows
+    n_windows = 1 + (n_samples - window_size) // step
+    # print(f"n_windows: {n_windows}, n_samples: {n_samples}, window_size: {window_size}, step: {step}")
+
+    windows = np.empty((n_windows, window_size, n_features), dtype=data.dtype)
+    for i in range(n_windows):
+        start = i * step
+        windows[i] = data[start : start + window_size]
+
+    return windows
+
+
+
+import numpy as np
+from scipy.signal import welch
+
+def compute_psd(windows, fs=100, nperseg=None, noverlap=None,
+                fmin=None, fmax=None):
+   
+    windows = np.asarray(windows)
+    n_windows, window_size, n_channels = windows.shape
+
+    if nperseg is None:
+        nperseg = window_size
+
+    # precompute full freqs using first channel of first window
+    freqs, _ = welch(windows[0, :, 0], fs=fs,
+                     nperseg=nperseg, noverlap=noverlap)
+    # full PSD array
+    full_psd = np.zeros((n_windows, n_channels, len(freqs)), dtype=float)
+
+    # fill it in
+    for i in range(n_windows):
+        for ch in range(n_channels):
+            _, Pxx = welch(windows[i, :, ch],
+                           fs=fs,
+                           nperseg=nperseg,
+                           noverlap=noverlap)
+            full_psd[i, ch, :] = Pxx
+
+    # now slice to [fmin, fmax]
+    if fmin is not None or fmax is not None:
+        mask = np.ones_like(freqs, dtype=bool)
+        if fmin is not None:
+            mask &= (freqs >= fmin)
+        if fmax is not None:
+            mask &= (freqs <= fmax)
+        freqs = freqs[mask]
+        psd = full_psd[:, :, mask]
+    else:
+        psd = full_psd
+
+    return freqs, psd
+
 class SignalDataset(Dataset):
     def __init__(self, data_folder, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7):
         self.records = find_records(data_folder)
@@ -238,6 +305,14 @@ def train_model(data_folder, model_folder, verbose):
     for i in range(num_records):
         record = os.path.join(data_folder, records[i])
         signals, label = load_and_process_signal_train(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
+        signals = windowing(signals, window_size=120, overlap=60)
+        print(f'signals shape after windowing: {signals.shape}')
+        freqs, psds = compute_psd(signals, fs=100, nperseg=100, noverlap=50,
+                          fmin=0.5, fmax=45)
+
+        print(freqs.min(), freqs.max())  # → 0.5, 40.0 (approximately)
+        print(psds.shape)  # → (13, 12, 100)
+        # print(signals.shape) #(13, 100, 12)
         X_train.append(signals)
         y_train.append(label)
         
@@ -373,11 +448,6 @@ def load_model(model_folder, verbose):
 
     return model
 
-# Change made by samin 
-    # return {
-    #     'model': model,
-    #     'scaler': scaler 
-    # }
 
 
 
