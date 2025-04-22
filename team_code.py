@@ -26,9 +26,10 @@ from scipy.signal import butter, lfilter
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score
 import random
-# import mne
+import mne
 import numpy as np
 from scipy.signal import welch
+from mne.time_frequency import psd_array_welch
 ################################################################################
 #
 # Required functions. Edit these functions to add your code, but do not change the arguments for the functions.
@@ -223,47 +224,83 @@ def windowing(data, window_size, overlap):
     return windows
 
 
+bands = {
+    'delta': (0.5, 4),
+    'theta': (4, 8),
+    'alpha': (8, 13),
+    'beta':  (13, 30),
+    'gamma': (30, 45),
+}
 
-import numpy as np
-from scipy.signal import welch
-
-def compute_psd(windows, fs=100, nperseg=None, noverlap=None,
-                fmin=None, fmax=None):
+def compute_psd_bands(windows, fs, bands, nperseg=None, noverlap=None):
    
-    windows = np.asarray(windows)
-    n_windows, window_size, n_channels = windows.shape
-
+    n_windows, win_size, n_channels = windows.shape
     if nperseg is None:
-        nperseg = window_size
+        nperseg = win_size
+    if noverlap is None:
+        noverlap = nperseg // 2
 
-    # precompute full freqs using first channel of first window
+    # Compute freq vector once (from the first window & channel)
     freqs, _ = welch(windows[0, :, 0], fs=fs,
                      nperseg=nperseg, noverlap=noverlap)
-    # full PSD array
-    full_psd = np.zeros((n_windows, n_channels, len(freqs)), dtype=float)
 
-    # fill it in
+    band_names = list(bands.keys())
+    n_bands = len(band_names)
+    psd_bands = np.zeros((n_windows, n_channels, n_bands))
+
+    # Pre‐compute index masks for each band
+    band_masks = []
+    for band in band_names:
+        fmin, fmax = bands[band]
+        mask = np.logical_and(freqs >= fmin, freqs <= fmax)
+        band_masks.append(mask)
+
+    # Loop over windows and channels
     for i in range(n_windows):
         for ch in range(n_channels):
-            _, Pxx = welch(windows[i, :, ch],
-                           fs=fs,
-                           nperseg=nperseg,
-                           noverlap=noverlap)
-            full_psd[i, ch, :] = Pxx
+            _, Pxx = welch(windows[i, :, ch], fs=fs,
+                           nperseg=nperseg, noverlap=noverlap)
+            # average PSD within each band
+            for j, mask in enumerate(band_masks):
+                psd_bands[i, ch, j] = Pxx[mask].mean()
 
-    # now slice to [fmin, fmax]
-    if fmin is not None or fmax is not None:
-        mask = np.ones_like(freqs, dtype=bool)
-        if fmin is not None:
-            mask &= (freqs >= fmin)
-        if fmax is not None:
-            mask &= (freqs <= fmax)
-        freqs = freqs[mask]
-        psd = full_psd[:, :, mask]
-    else:
-        psd = full_psd
+    return psd_bands, freqs, band_names
 
-    return freqs, psd
+
+import numpy as np
+from mne.time_frequency import psd_array_welch
+
+# def compute_psd_bands_mne(windows, sfreq, bands,
+#                           n_fft=None, n_overlap=None, verbose=False):
+#     # windows: (n_epochs, n_times, n_channels)
+#     data = np.transpose(windows, (0, 2, 1))  # → (n_epochs, n_channels, n_times)
+#     n_epochs, n_channels, n_times = data.shape
+
+#     # if no n_fft given, pick next power-of-2 ≥ n_times
+#     if n_fft is None:
+#         # e.g. n_times=120 → 128
+#         n_fft = 1 << (n_times - 1).bit_length()
+#     # default 50% overlap
+#     if n_overlap is None:
+#         n_overlap = n_fft // 2
+
+#     band_names = list(bands.keys())
+#     psd_bands = np.zeros((n_epochs, n_channels, len(band_names)))
+#     freqs = None
+
+#     for idx, (band, (fmin, fmax)) in enumerate(bands.items()):
+#         # shape out: (n_epochs, n_channels, n_freqs)
+#         psds, freqs = psd_array_welch(
+#             data, sfreq=sfreq,
+#             fmin=fmin, fmax=fmax,
+#             n_fft=n_fft, n_overlap=n_overlap,
+#             verbose=verbose
+#         )
+#         # average across the freq dimension
+#         psd_bands[:, :, idx] = psds.mean(axis=-1)
+
+#     return psd_bands, freqs, band_names
+
 
 class SignalDataset(Dataset):
     def __init__(self, data_folder, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7):
@@ -306,12 +343,26 @@ def train_model(data_folder, model_folder, verbose):
         record = os.path.join(data_folder, records[i])
         signals, label = load_and_process_signal_train(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
         signals = windowing(signals, window_size=120, overlap=60)
-        print(f'signals shape after windowing: {signals.shape}')
-        freqs, psds = compute_psd(signals, fs=100, nperseg=100, noverlap=50,
-                          fmin=0.5, fmax=45)
+        # print(f'signals shape after windowing: {signals.shape}') #(10, 120, 12)
+        psd_bands, freqs, band_names = compute_psd_bands(signals, 100, bands)
+        print(f'psd_bands shape: {psd_bands.shape}') #(10, 12, 5)
+        # print a single band value
+        print(f'psd_bands[0, 0, 0]: {psd_bands}')
+        # print(f'freqs shape: {freqs.shape}') #(45,)
+        # print(f'band_names shape: {band_names}')
 
-        print(freqs.min(), freqs.max())  # → 0.5, 40.0 (approximately)
-        print(psds.shape)  # → (13, 12, 100)
+
+
+
+        # print(f'psd_bands-----------------------MNE: {psd_bands}')
+        # print(f'freqs shape: {freqs.shape}') #(45,)
+
+
+
+        # print(freqs.min(), freqs.max())  # → 0.5, 40.0 (approximately)
+        # print(psd_bands.shape)  
+        # print(band_names)  # array of length 45
+
         # print(signals.shape) #(13, 100, 12)
         X_train.append(signals)
         y_train.append(label)
@@ -321,17 +372,17 @@ def train_model(data_folder, model_folder, verbose):
     y_train = np.array(y_train)
     # print(y_train)
     # in y_train, calculate the number of 1s and 0s
-    num_1s = np.sum(y_train == 1)
-    num_0s = np.sum(y_train == 0)
-    print(f"Number of 1s: {num_1s}")
-    print(f"Number of 0s: {num_0s}")
+    # num_1s = np.sum(y_train == 1)
+    # num_0s = np.sum(y_train == 0)
+    # print(f"Number of 1s: {num_1s}")
+    # print(f"Number of 0s: {num_0s}")
 
     # scale the data
     X_train = scaler.fit_transform(X_train.reshape(X_train.shape[0], -1)).reshape(X_train.shape)
     
-    print(scaler.mean_, scaler.scale_)
+  
 
-    # print("X_train shape: ", X_train.shape)
+
 
     #create tensor dataset
     dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.long))
