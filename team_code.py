@@ -53,16 +53,21 @@ def seed_everything(seed=42):
 seed_everything(42)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-INPUT_DIM=12
-HIDDEN_DIM=32
-N_LAYERS=1
-N_HEADS=4
-DROPOUT=0.1
-NUM_CLASSES=2
+# INPUT_DIM=12
+# HIDDEN_DIM=32
+# N_LAYERS=1
+# N_HEADS=4
+# DROPOUT=0.1
+# NUM_CLASSES=2
 EPOCHS = 50
 LEARNING_RATE = 0.001
 
-
+SPATIAL_INPUT_DIM = 10
+TEMPORAL_INPUT_DIM = 120
+N_HEADS = 1
+N_LAYERS = 1
+DROPOUT = 0.2
+NUM_CLASSES = 2  
 
 def filter_data(signal, lowcut=0.5, highcut=40.0, fs=250.0, order=5):
     nyquist = 0.5 * fs
@@ -75,47 +80,105 @@ def filter_data(signal, lowcut=0.5, highcut=40.0, fs=250.0, order=5):
 
 
 
-class simple_transformer_encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, n_layers, n_heads, dropout, num_classes, seq_length=None):
-        super().__init__()
+# class simple_transformer_encoder(nn.Module):
+#     def __init__(self, input_dim, hidden_dim, n_layers, n_heads, dropout, num_classes, seq_length=None):
+#         super().__init__()
         
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.n_layers = n_layers
+#         self.input_dim = input_dim
+#         self.hidden_dim = hidden_dim
+#         self.n_layers = n_layers
+#         self.n_heads = n_heads
+#         self.dropout = dropout
+#         self.num_classes = num_classes
+#         self.seq_length = seq_length
+
+#         self.transformer_encoder = nn.TransformerEncoder(
+#             nn.TransformerEncoderLayer(
+#                 d_model=self.input_dim,
+#                 nhead=self.n_heads,
+#                 dim_feedforward=self.hidden_dim,
+#                 dropout=self.dropout,
+#                 batch_first=True
+#             ),
+#             num_layers=self.n_layers
+#         )
+        
+#         self.class_token = nn.Parameter(torch.randn(1, 1, self.input_dim))
+#         self.positional_encoding = nn.Parameter(torch.randn(1, int(self.seq_length + 1), self.input_dim))
+
+
+#         self.classifier = nn.Linear(self.input_dim, self.num_classes)
+
+#     def forward(self, src):
+#         # src = src.permute(0, 2, 1)
+#         src = torch.cat((self.class_token.repeat(src.shape[0], 1, 1), src), dim=1)
+#         src += self.positional_encoding
+
+#         output = self.transformer_encoder(src)
+#         # output = output.permute(0, 2, 1)
+#         #use the output of the class token
+#         output = self.classifier(output[:, 0, :])
+    
+#         return output
+    
+
+class simple_transformer_encoder(nn.Module):
+    def __init__(self, input_dim_spatial,n_heads, n_layers, dropout, num_classes, input_dim_temporal):
+        super().__init__()
+
+        self.input_dim_spatial = input_dim_spatial
+        self.input_dim_temporal = input_dim_temporal
         self.n_heads = n_heads
+        self.n_layers = n_layers
         self.dropout = dropout
         self.num_classes = num_classes
-        self.seq_length = seq_length
 
-        self.transformer_encoder = nn.TransformerEncoder(
+        self.spatial_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
-                d_model=self.input_dim,
+                d_model=self.input_dim_spatial,
                 nhead=self.n_heads,
-                dim_feedforward=self.hidden_dim,
+                dim_feedforward=self.input_dim_spatial*2,
                 dropout=self.dropout,
                 batch_first=True
             ),
             num_layers=self.n_layers
         )
-        
-        self.class_token = nn.Parameter(torch.randn(1, 1, self.input_dim))
-        self.positional_encoding = nn.Parameter(torch.randn(1, int(self.seq_length + 1), self.input_dim))
 
+        self.temporal_transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=self.input_dim_temporal,
+                nhead=self.n_heads,
+                dim_feedforward=self.input_dim_temporal*2,
+                dropout=self.dropout,
+                batch_first=True
+            ),
+            num_layers=self.n_layers
+        )
 
-        self.classifier = nn.Linear(self.input_dim, self.num_classes)
-
-    def forward(self, src):
-        # src = src.permute(0, 2, 1)
-        src = torch.cat((self.class_token.repeat(src.shape[0], 1, 1), src), dim=1)
-        src += self.positional_encoding
-
-        output = self.transformer_encoder(src)
-        # output = output.permute(0, 2, 1)
-        #use the output of the class token
-        output = self.classifier(output[:, 0, :])
+        self.classifier = nn.Linear(self.input_dim_temporal*6, self.num_classes)
+        self.flatten = nn.Flatten()
+    def forward(self, x):
+        # x = x.permute(0, 2, 1)
+        # input size: (B, 6, 12, 10)
+        # Reshape to (B*6, 12, 10)
+        x = x.view(x.size(0) * x.size(1), x.size(2), x.size(3))
+        # Spatial Transformer
+        x = self.spatial_transformer(x)
+        # Reshape for temporal to (B, 6, 12*10)
+        x = x.view(x.size(0) // 6, 6, x.size(1) * x.size(2))
+        # Temporal Transformer
+        x = self.temporal_transformer(x)
+        # x = x.permute(0, 2, 1)
+        # Use the output of the class token
+        x = self.flatten(x)
+        x = self.classifier(x) # b, 2
     
-        return output
-    
+        return x
+
+
+
+
+
 
 # Load and preprocess raw signals
 # def load_and_process_signal(record, desired_length=3000):
@@ -204,8 +267,9 @@ def load_and_process_signal_test(record, desired_samping_rate, low_cut = 0.5, hi
 def windowing(data, window_size, overlap):
     # ensure array
     data = np.asarray(data)
+    # print(f"data shape: {data.shape}")
     n_samples, n_features = data.shape
-
+    # print(f"n_samples: {n_samples}, n_features: {n_features}")
     if window_size > n_samples:
         raise ValueError(f"window_size ({window_size}) > n_samples ({n_samples})")
     if not (0 <= overlap < window_size):
@@ -225,11 +289,10 @@ def windowing(data, window_size, overlap):
 
 
 bands = {
-    'delta': (0.5, 4),
-    'theta': (4, 8),
-    'alpha': (8, 13),
-    'beta':  (13, 30),
-    'gamma': (30, 45),
+    'P': (0.5, 10),
+    'QRS': (10, 40),
+    'H': (0.5, 5),
+    'ST':  (0.05, 1),
 }
 
 def compute_psd_bands(windows, fs, bands, nperseg=None, noverlap=None):
@@ -299,7 +362,140 @@ from mne.time_frequency import psd_array_welch
 #         # average across the freq dimension
 #         psd_bands[:, :, idx] = psds.mean(axis=-1)
 
+def embed_seq(time_series, tau, embedding_dimension):
+    if not type(time_series) == np.ndarray:
+        typed_time_series = np.asarray(time_series)
+    else:
+        typed_time_series = time_series
+
+    shape = (typed_time_series.size - tau * (embedding_dimension - 1),
+             embedding_dimension)
+
+    strides = (typed_time_series.itemsize, tau * typed_time_series.itemsize)
+
+    return np.lib.stride_tricks.as_strided(typed_time_series,
+                                           shape=shape,
+                                           strides=strides)
+def sample_entropy(eeg: np.ndarray, **kwargs) -> np.ndarray:
+    N = len(eeg)
+    M = 5
+    R = 1.0
+
+    Em = embed_seq(eeg, 1, M)
+    A = np.tile(Em, (len(Em), 1, 1))
+    B = np.transpose(A, [1, 0, 2])
+    D = np.abs(A - B)
+    InRange = np.max(D, axis=2) <= R
+    np.fill_diagonal(InRange, 0)
+
+    Cm = InRange.sum(axis=0)
+    Dp = np.abs(
+        np.tile(eeg[M:], (N - M, 1)) -
+        np.tile(eeg[M:], (N - M, 1)).T)
+
+    Cmp = np.logical_and(Dp <= R, InRange[:-1, :-1]).sum(axis=0)
+
+    Samp_En = np.log(np.sum(Cm + 1e-100) / np.sum(Cmp + 1e-100))
+
+    return Samp_En
+
+
+def HFD(eeg: np.ndarray, **kwargs) -> np.ndarray:
+    L = []
+    x = []
+    N = len(eeg)
+    K_max = int(np.floor(N / 2))
+    for k in range(1, K_max):
+        Lk = []
+        for m in range(0, k):
+            Lmk = 0
+            for i in range(1, int(np.floor((N - m) / k))):
+                Lmk += abs(eeg[m + i * k] - eeg[m + i * k - k])
+            Lmk = Lmk * (N - 1) / np.floor((N - m) / float(k)) / k
+            Lk.append(Lmk)
+        L.append(np.log(np.mean(Lk)))
+        x.append([np.log(float(1) / k), 1])
+
+    (p, _, _, _) = np.linalg.lstsq(x, L, rcond=None)
+    return p[0]
+
+
+
+
+
 #     return psd_bands, freqs, band_names
+from scipy.stats import kurtosis, skew
+def time_and_complexity(windows: np.ndarray) -> np.ndarray:
+    """
+    Compute time‐domain & complexity features for each window & channel.
+
+    Parameters
+    ----------
+    windows : np.ndarray, shape (n_windows, n_channels, n_samples)
+
+    Returns
+    -------
+    tc_feats : np.ndarray, shape (n_windows, n_channels, 6)
+        Columns = [mean, std, sample_entropy, kurtosis, skewness, HFD]
+    """
+    n_windows, _, n_channels = windows.shape
+
+    # Preallocate arrays
+    mean_arr   = np.zeros((n_windows, n_channels))
+    std_arr    = np.zeros((n_windows, n_channels))
+    sampen_arr = np.zeros((n_windows, n_channels))
+    kurt_arr   = np.zeros((n_windows, n_channels))
+    skew_arr   = np.zeros((n_windows, n_channels))
+    hfd_arr    = np.zeros((n_windows, n_channels))
+
+    for w in range(n_windows):
+        for ch in range(n_channels):
+            seg = windows[w, ch, :]
+            mean_arr[w, ch]   = np.mean(seg)
+            std_arr[w, ch]    = np.std(seg)
+            sampen_arr[w, ch] = sample_entropy(seg)
+            kurt_arr[w, ch]   = kurtosis(seg)
+            skew_arr[w, ch]   = skew(seg)
+            hfd_arr[w, ch]    = HFD(seg)
+
+    # stack into (n_windows, n_channels, 6)
+    return np.stack(
+        [mean_arr,
+         std_arr,
+         sampen_arr,
+         kurt_arr,
+         skew_arr,
+         hfd_arr],
+        axis=2
+    )
+
+
+def feature_extractor(signals: np.ndarray) -> np.ndarray:
+    """
+    signals: shape (n_channels, n_samples)
+    returns: features shape (n_windows, n_channels, n_psd_bands + 6)
+    """
+    # 1) Window the signals
+    window_signals = windowing(signals, window_size=200, overlap=100)
+    #    shape = (n_windows, n_channels, n_samples)
+
+    # 2) PSD bands per window & channel
+    psd, freqs, band_names = compute_psd_bands(
+        window_signals, fs=100, bands=bands
+
+    )
+    #    psd.shape = (n_windows, n_channels, n_psd_bands)
+
+    # 3) Time & complexity features per window & channel
+    tc_feats = time_and_complexity(window_signals)
+    #    tc_feats.shape = (n_windows, n_channels, 6)
+    # print(f"tc_feats shape: {tc_feats.shape}")
+    # print(f"psd shape: {psd.shape}")
+    # 4) Concatenate along feature axis → (n_windows, n_channels, n_psd_bands+6)
+    features = np.concatenate([psd, tc_feats], axis=2)
+    # print(f"features shape: {features.shape}")
+    return features
+
 
 
 class SignalDataset(Dataset):
@@ -321,10 +517,11 @@ class SignalDataset(Dataset):
                                                 desired_samping_rate=self.desired_samping_rate, 
                                                 low_cut=self.low_cut, high_cut=self.high_cut, 
                                                 desired_lenght=self.desired_lenght)
-        
-        signals = torch.tensor(signals, dtype=torch.float32)  # Convert to PyTorch tensor
+        signals_features = feature_extractor(signals)
+        #signals_features shape should be (number of windows, 12, 10)
+        signals_features = torch.tensor(signals, dtype=torch.float32)  # Convert to PyTorch tensor
         label = torch.tensor(label, dtype=torch.long)  # Convert to PyTorch tensor
-        return signals, label
+        return signals_features, label
 
 # Train your model.
 def train_model(data_folder, model_folder, verbose):
@@ -342,14 +539,13 @@ def train_model(data_folder, model_folder, verbose):
     for i in range(num_records):
         record = os.path.join(data_folder, records[i])
         signals, label = load_and_process_signal_train(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
-        signals = windowing(signals, window_size=120, overlap=60)
-        # print(f'signals shape after windowing: {signals.shape}') #(10, 120, 12)
-        psd_bands, freqs, band_names = compute_psd_bands(signals, 100, bands)
-        print(f'psd_bands shape: {psd_bands.shape}') #(10, 12, 5)
-        # print a single band value
-        print(f'psd_bands[0, 0, 0]: {psd_bands}')
-        # print(f'freqs shape: {freqs.shape}') #(45,)
-        # print(f'band_names shape: {band_names}')
+        # signals = windowing(signals, window_size=200, overlap=100)
+        # psd_bands, freqs, band_names = compute_psd_bands(signals, 100, bands)
+        # print(f'psd_bands shape: {psd_bands.shape}') #(10, 12, 5)
+        # print(f'psd_bands[0, 0, 0]: {psd_bands}')
+        signals_features = feature_extractor(signals)
+        # print(f'signals_features shape: {signals_features.shape}') #(10, 12, 10)
+
 
 
 
@@ -364,7 +560,7 @@ def train_model(data_folder, model_folder, verbose):
         # print(band_names)  # array of length 45
 
         # print(signals.shape) #(13, 100, 12)
-        X_train.append(signals)
+        X_train.append(signals_features)
         y_train.append(label)
         
 
@@ -383,28 +579,34 @@ def train_model(data_folder, model_folder, verbose):
   
 
 
-
+    print(f"X_train shape: {X_train.shape}")
     #create tensor dataset
     dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.long))
 
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
     # Get num_channels from the first sample
-    sample_signals, _ = dataset[0]
-    num_channels = sample_signals.shape[1]
-    seq_length = sample_signals.shape[0]
+    # sample_signals, _ = dataset[0]
+    # num_channels = sample_signals.shape[1]
+    # seq_length = sample_signals.shape[0]
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = simple_transformer_encoder(input_dim=INPUT_DIM,
-                                       seq_length=seq_length, 
-                                        hidden_dim=HIDDEN_DIM, 
-                                        n_layers=N_LAYERS, 
-                                        n_heads=N_HEADS, 
-                                        dropout=DROPOUT, 
-                                        num_classes=NUM_CLASSES).to(DEVICE)
-
-    criterion = nn.CrossEntropyLoss()
+    # model = simple_transformer_encoder(input_dim=INPUT_DIM,
+    #                                    seq_length=seq_length, 
+    #                                     hidden_dim=HIDDEN_DIM, 
+    #                                     n_layers=N_LAYERS, 
+    #                                     n_heads=N_HEADS, 
+    #                                     dropout=DROPOUT, 
+    #                                     num_classes=NUM_CLASSES).to(DEVICE)
+    model = simple_transformer_encoder(input_dim_spatial=SPATIAL_INPUT_DIM,
+                                       input_dim_temporal=TEMPORAL_INPUT_DIM,
+                                       n_heads=N_HEADS, 
+                                       n_layers=N_LAYERS, 
+                                       dropout=DROPOUT, 
+                                       num_classes=NUM_CLASSES,
+                                       ).to(DEVICE)
+    criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.2, 1.0]).to(DEVICE))
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     # epochs = 20
 
@@ -420,6 +622,7 @@ def train_model(data_folder, model_folder, verbose):
         all_labels = []
         
         for batch_signals, batch_labels in dataloader:
+            # print(batch_signals.shape)
             batch_signals = batch_signals.to(DEVICE)
             batch_labels = batch_labels.to(DEVICE)
             optimizer.zero_grad()
@@ -460,7 +663,7 @@ def train_model(data_folder, model_folder, verbose):
 
     # Save the model.
     
-    save_model(model_folder, model, seq_length, num_channels, scaler)
+    save_model(model_folder, model, scaler)
 
     if verbose:
         print('Done.')
@@ -481,14 +684,20 @@ def load_model(model_folder, verbose):
     if verbose:
         print('Extracting features and labels from the data...')
 
-    model = simple_transformer_encoder(input_dim=INPUT_DIM, 
-                                       hidden_dim=HIDDEN_DIM, 
-                                       n_layers=N_LAYERS, 
+    # model = simple_transformer_encoder(input_dim=INPUT_DIM, 
+    #                                    hidden_dim=HIDDEN_DIM, 
+    #                                    n_layers=N_LAYERS, 
+    #                                    n_heads=N_HEADS, 
+    #                                    dropout=DROPOUT, 
+    #                                    num_classes=NUM_CLASSES,
+    #                                    seq_length=700).to(DEVICE)
+    model = simple_transformer_encoder(input_dim_spatial=SPATIAL_INPUT_DIM,
+                                       input_dim_temporal=TEMPORAL_INPUT_DIM,
                                        n_heads=N_HEADS, 
+                                       n_layers=N_LAYERS, 
                                        dropout=DROPOUT, 
                                        num_classes=NUM_CLASSES,
-                                       seq_length=700).to(DEVICE)
-
+                                       ).to(DEVICE)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
@@ -536,17 +745,18 @@ def run_model(record, model, verbose):
     # signals, fields = load_and_process_signal(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
     
     signals = load_and_process_signal_test(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
-
+    
+    signals_features = feature_extractor(signals)
 
     if len(signals.shape) > 2:
-        signals = model.scaler.transform(signals.reshape(signals.shape[0], -1)).reshape(signals.shape)  
+        signals_features = model.scaler.transform(signals_features.reshape(signals_features.shape[0], -1)).reshape(signals_features.shape)  
     else:
-        signals = model.scaler.transform(signals.reshape(1, -1)).reshape(signals.shape)
-    signals = torch.tensor(signals).unsqueeze(0).to(DEVICE)  # shape: (1, seq_length, channels)
+        signals_features = model.scaler.transform(signals_features.reshape(1, -1)).reshape(signals_features.shape)
+    signals_features = torch.tensor(signals_features, dtype=torch.float32).unsqueeze(0).to(DEVICE)  # shape: (1, seq_length, channels)
     
 
     with torch.no_grad():
-        logits = model(signals)
+        logits = model(signals_features)
         
         probs = F.softmax(logits, dim=1).cpu().numpy()
 
@@ -608,11 +818,11 @@ def extract_features(record):
 
 
 # Save model function
-def save_model(model_folder, model, seq_length, num_channels, scaler):
+def save_model(model_folder, model, scaler):
     torch.save({
         'model_state_dict': model.state_dict(),
-        'seq_length': seq_length,
-        'num_channels': num_channels,
+        # 'seq_length': seq_length,
+        # 'num_channels': num_channels,
         'scaler': scaler
     }, os.path.join(model_folder, 'transformer_model.pt'))
 
