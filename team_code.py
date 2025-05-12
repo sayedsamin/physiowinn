@@ -50,6 +50,87 @@ def seed_everything(seed=42):
     torch.backends.cudnn.enabled = False
     random.seed(seed)
 
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2, alpha=None, reduction='mean', task_type='binary', num_classes=None):
+        """
+        Unified Focal Loss class for binary, multi-class, and multi-label classification tasks.
+        :param gamma: Focusing parameter, controls the strength of the modulating factor (1 - p_t)^gamma
+        :param alpha: Balancing factor, can be a scalar or a tensor for class-wise weights. If None, no class balancing is used.
+        :param reduction: Specifies the reduction method: 'none' | 'mean' | 'sum'
+        :param task_type: Specifies the type of task: 'binary', 'multi-class', or 'multi-label'
+        :param num_classes: Number of classes (only required for multi-class classification)
+        """
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = reduction
+        self.task_type = task_type
+        self.num_classes = num_classes
+
+        # Handle alpha for class balancing in multi-class tasks
+        if task_type == 'multi-class' and alpha is not None and isinstance(alpha, (list, torch.Tensor)):
+            assert num_classes is not None, "num_classes must be specified for multi-class classification"
+            if isinstance(alpha, list):
+                self.alpha = torch.Tensor(alpha)
+            else:
+                self.alpha = alpha
+
+    def forward(self, inputs, targets):
+        """
+        Forward pass to compute the Focal Loss based on the specified task type.
+        :param inputs: Predictions (logits) from the model.
+                       Shape:
+                         - binary/multi-label: (batch_size, num_classes)
+                         - multi-class: (batch_size, num_classes)
+        :param targets: Ground truth labels.
+                        Shape:
+                         - binary: (batch_size,)
+                         - multi-label: (batch_size, num_classes)
+                         - multi-class: (batch_size,)
+        """
+        if self.task_type == 'binary':
+            return self.binary_focal_loss(inputs, targets)
+        elif self.task_type == 'multi-class':
+            return self.multi_class_focal_loss(inputs, targets)
+        elif self.task_type == 'multi-label':
+            return self.multi_label_focal_loss(inputs, targets)
+        else:
+            raise ValueError(
+                f"Unsupported task_type '{self.task_type}'. Use 'binary', 'multi-class', or 'multi-label'.")
+
+
+    def multi_class_focal_loss(self, inputs, targets):
+        """ Focal loss for multi-class classification. """
+        if self.alpha is not None:
+            alpha = self.alpha.to(inputs.device)
+
+        # Convert logits to probabilities with softmax
+        probs = F.softmax(inputs, dim=1)
+
+        # One-hot encode the targets
+        targets_one_hot = F.one_hot(targets, num_classes=self.num_classes).float()
+
+        # Compute cross-entropy for each class
+        ce_loss = -targets_one_hot * torch.log(probs)
+
+        # Compute focal weight
+        p_t = torch.sum(probs * targets_one_hot, dim=1)  # p_t for each sample
+        focal_weight = (1 - p_t) ** self.gamma
+
+        # Apply alpha if provided (per-class weighting)
+        if self.alpha is not None:
+            alpha_t = alpha.gather(0, targets)
+            ce_loss = alpha_t.unsqueeze(1) * ce_loss
+
+        # Apply focal loss weight
+        loss = focal_weight.unsqueeze(1) * ce_loss
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        return loss
+
 seed_everything(42)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -523,6 +604,7 @@ class SignalDataset(Dataset):
         label = torch.tensor(label, dtype=torch.long)  # Convert to PyTorch tensor
         return signals_features, label
 
+
 # Train your model.
 def train_model(data_folder, model_folder, verbose):
     # Find the data files.
@@ -536,44 +618,67 @@ def train_model(data_folder, model_folder, verbose):
     #loading functions with fixed parameters
     X_train = []
     y_train = []
-    for i in range(num_records):
-        record = os.path.join(data_folder, records[i])
-        signals, label = load_and_process_signal_train(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
-        # signals = windowing(signals, window_size=200, overlap=100)
-        # psd_bands, freqs, band_names = compute_psd_bands(signals, 100, bands)
-        # print(f'psd_bands shape: {psd_bands.shape}') #(10, 12, 5)
-        # print(f'psd_bands[0, 0, 0]: {psd_bands}')
-        signals_features = feature_extractor(signals)
-        # print(f'signals_features shape: {signals_features.shape}') #(10, 12, 10)
+
+    # check if X_train.npy and y_train.npy doesnot exist
+    if not (os.path.exists(os.path.join(data_folder, "X_train.npy")) and os.path.exists(os.path.join(data_folder, "y_train.npy"))):
+
+        print ("Starting preprocessing...")
+        for i in range(num_records):
+            record = os.path.join(data_folder, records[i])
+            print(f"record: {i} of {num_records}: {record}")
+
+
+            signals, label = load_and_process_signal_train(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
+            signals_features = feature_extractor(signals)
+        
+            # signals = windowing(signals, window_size=200, overlap=100)
+            # psd_bands, freqs, band_names = compute_psd_bands(signals, 100, bands)
+            # print(f'psd_bands shape: {psd_bands.shape}') #(10, 12, 5)
+            # print(f'psd_bands[0, 0, 0]: {psd_bands}')
+            # print(f'signals shape: {signals.shape}') #(13, 100, 12)
+        
+            # print(f'signals_features shape: {signals_features.shape}') #(10, 12, 10)
 
 
 
 
 
-        # print(f'psd_bands-----------------------MNE: {psd_bands}')
-        # print(f'freqs shape: {freqs.shape}') #(45,)
+            # print(f'psd_bands-----------------------MNE: {psd_bands}')
+            # print(f'freqs shape: {freqs.shape}') #(45,)
 
 
 
-        # print(freqs.min(), freqs.max())  # → 0.5, 40.0 (approximately)
-        # print(psd_bands.shape)  
-        # print(band_names)  # array of length 45
+            # print(freqs.min(), freqs.max())  # → 0.5, 40.0 (approximately)
+            # print(psd_bands.shape)  
+            # print(band_names)  # array of length 45
 
-        # print(signals.shape) #(13, 100, 12)
-        X_train.append(signals_features)
-        y_train.append(label)
+            # print(signals.shape) #(13, 100, 12)
+            X_train.append(signals_features)
+            y_train.append(label)
+
         
 
-    X_train = np.array(X_train)
-    y_train = np.array(y_train)
+
+        # Store the data in a numpy array, file name should be foldername + "X_train.npy"
+        np.save(os.path.join(data_folder, "X_train.npy"), X_train)
+        np.save(os.path.join(data_folder, "y_train.npy"), y_train)
+        X_train = np.array(X_train)
+        y_train = np.array(y_train)
+
+    else:
+        print ("Loading the data from the saved files...")
+        X_train = np.load(os.path.join(data_folder, "X_train.npy"))
+        y_train = np.load(os.path.join(data_folder, "y_train.npy"))
+
+
     # print(y_train)
     # in y_train, calculate the number of 1s and 0s
     # num_1s = np.sum(y_train == 1)
     # num_0s = np.sum(y_train == 0)
     # print(f"Number of 1s: {num_1s}")
     # print(f"Number of 0s: {num_0s}")
-
     # scale the data
+    print("Starting scaling...")
     X_train = scaler.fit_transform(X_train.reshape(X_train.shape[0], -1)).reshape(X_train.shape)
     
   
@@ -606,8 +711,40 @@ def train_model(data_folder, model_folder, verbose):
                                        dropout=DROPOUT, 
                                        num_classes=NUM_CLASSES,
                                        ).to(DEVICE)
-    criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.2, 1.0]).to(DEVICE))
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    
+    #total negative samples and positive samples
+    num_0s = np.sum(y_train == 0)
+    num_1s = np.sum(y_train == 1)
+    total_samples = (num_0s + num_1s).astype(float)
+
+    # class_weights_0 = torch.tensor([0.2, 1.0 ]).to(DEVICE)
+    # class_weights_0_var = (num_0s/num_1s).astype(float)
+
+    class_weights_0_var = (num_0s/num_1s)
+    print (f"class_weights_0_var: {class_weights_0_var}")
+    
+    #dtype
+    print(f"{class_weights_0_var.dtype}")
+
+    # I'm gonna hardcode the class weights for now, fix later
+    class_weights_0 = torch.tensor([1.0, 30.0 ]).to(DEVICE)
+    # print (f"class_weights_0: {class_weights_0}")
+    # class_weights_0 = torch.tensor([1.0, num_0s/num_1s], dtype=torch.float32).to(DEVICE)
+
+
+
+
+    # class_weights_1 = torch.tensor([(total_samples/2*num_0s), (total_samples/2*num_1s)], dtype=torch.float32).to(DEVICE)
+
+    # criterion = nn.CrossEntropyLoss(weight=class_weights_1).to(DEVICE)
+    
+
+    #test class_weights_1 and class_weights_0 both with focal loss too.
+    focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean', task_type='multi-class', num_classes=NUM_CLASSES).to(DEVICE)
+    criterion = focal_loss.to(DEVICE)
+
+
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     # epochs = 20
 
     if verbose:
@@ -624,12 +761,18 @@ def train_model(data_folder, model_folder, verbose):
         for batch_signals, batch_labels in dataloader:
             # print(batch_signals.shape)
             batch_signals = batch_signals.to(DEVICE)
+            # batch_labels = batch_labels.long().to(DEVICE)
+
             batch_labels = batch_labels.to(DEVICE)
+
             optimizer.zero_grad()
             
             # Forward pass
             outputs = model(batch_signals)
             
+            # print(outputs.dtype)
+            # print(batch_labels.dtype)
+
             # Compute loss
             loss = criterion(outputs, batch_labels)
             loss.backward()
@@ -768,7 +911,7 @@ def run_model(record, model, verbose):
     probability_output = probs[0,1]
 
     
-    print(f"pred_class: {pred_class}, binary_output: {binary_output}, probability_output: {probability_output}")
+    # print(f"pred_class: {pred_class}, binary_output: {binary_output}, probability_output: {probability_output}")
 
     return binary_output, probability_output
 
