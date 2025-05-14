@@ -175,9 +175,21 @@ cython_debug/
 
 holdout_data/
 holdout_outputs/
+# anyfolder that contains the word "holdout" in it
+holdout*
+
 model/
 ptbxl_output/
 training_data/
+data/
+holdout*/
+holdout_outputs/
+helper/
+Mahdis/5fold/
+Mahdis/fold/
+Mahdis/split/
+
+Mahdis/split/
 
 
 pythoncodes.txt
