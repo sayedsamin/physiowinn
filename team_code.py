@@ -26,10 +26,10 @@ from scipy.signal import butter, lfilter
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score
 import random
-import mne
+# import mne
 import numpy as np
 from scipy.signal import welch
-from mne.time_frequency import psd_array_welch
+# from mne.time_frequency import psd_array_welch
 ################################################################################
 #
 # Required functions. Edit these functions to add your code, but do not change the arguments for the functions.
