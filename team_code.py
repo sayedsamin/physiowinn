@@ -411,8 +411,6 @@ def compute_psd_bands(windows, fs, bands, nperseg=None, noverlap=None):
     return psd_bands, freqs, band_names
 
 
-import numpy as np
-from mne.time_frequency import psd_array_welch
 
 # def compute_psd_bands_mne(windows, sfreq, bands,
 #                           n_fft=None, n_overlap=None, verbose=False):
@@ -684,7 +682,7 @@ def train_model(data_folder, model_folder, verbose):
   
 
 
-    print(f"X_train shape: {X_train.shape}")
+   
     #create tensor dataset
     dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.long))
 
@@ -715,29 +713,31 @@ def train_model(data_folder, model_folder, verbose):
     #total negative samples and positive samples
     num_0s = np.sum(y_train == 0)
     num_1s = np.sum(y_train == 1)
-    total_samples = (num_0s + num_1s).astype(float)
+    # total_samples = (num_0s + num_1s).astype(float)
 
     # class_weights_0 = torch.tensor([0.2, 1.0 ]).to(DEVICE)
     # class_weights_0_var = (num_0s/num_1s).astype(float)
 
-    class_weights_0_var = (num_0s/num_1s)
-    print (f"class_weights_0_var: {class_weights_0_var}")
+    # class_weights_0_var = (num_0s/num_1s)
+    # print (f"class_weights_0_var: {class_weights_0_var}")
     
     #dtype
-    print(f"{class_weights_0_var.dtype}")
+    # print(f"{class_weights_0_var.dtype}")
 
     # I'm gonna hardcode the class weights for now, fix later
-    class_weights_0 = torch.tensor([1.0, 30.0 ]).to(DEVICE)
+    # class_weights_0 = torch.tensor([0.2, 1.0 ]).to(DEVICE)
+    # class_weights_0 = torch.tensor([1.0, 30.0 ]).to(DEVICE)
+
     # print (f"class_weights_0: {class_weights_0}")
-    # class_weights_0 = torch.tensor([1.0, num_0s/num_1s], dtype=torch.float32).to(DEVICE)
+    class_weights_0 = torch.tensor([1.0, num_0s/num_1s], dtype=torch.float32).to(DEVICE)
 
 
 
 
     # class_weights_1 = torch.tensor([(total_samples/2*num_0s), (total_samples/2*num_1s)], dtype=torch.float32).to(DEVICE)
 
-    # criterion = nn.CrossEntropyLoss(weight=class_weights_1).to(DEVICE)
-    
+    # criterion = nn.CrossEntropyLoss(weight=class_weights_0).to(DEVICE)
+    # print(f"criterion: {class_weights_0}")
 
     #test class_weights_1 and class_weights_0 both with focal loss too.
     focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean', task_type='multi-class', num_classes=NUM_CLASSES).to(DEVICE)
