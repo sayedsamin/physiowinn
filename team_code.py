@@ -505,11 +505,6 @@ def train_model(data_folder, model_folder, verbose):
         y_train.append(label)
 
         
-
-
-    np.save(os.path.join(data_folder, "X_train.npy"), X_train)
-    np.save(os.path.join(data_folder, "y_train.npy"), y_train)
-
     X_train = np.array(X_train)
     y_train = np.array(y_train)
 
