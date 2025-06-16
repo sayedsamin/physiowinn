@@ -188,7 +188,6 @@ helper/
 Mahdis/5fold/
 Mahdis/fold/
 Mahdis/split/
-
 Mahdis/split/
 
 
@@ -200,3 +199,4 @@ model/
 sample_test/
 sample_train/
 team_code_backup.py
+splits/

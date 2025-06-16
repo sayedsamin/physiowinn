@@ -132,56 +132,37 @@ def filter_data(signal, lowcut=0.5, highcut=40.0, fs=250.0, order=5):
 
 
 class simple_transformer_encoder(nn.Module):
-    def __init__(self, input_dim_spatial,n_heads, n_layers, dropout, num_classes, input_dim_temporal):
-        super().__init__()
-
-        self.input_dim_spatial = input_dim_spatial
-        self.input_dim_temporal = input_dim_temporal
+    def __init__(self, input_dim, n_heads=N_HEADS, n_layers=N_LAYERS, dropout=DROPOUT, num_classes=NUM_CLASSES):
+        super(simple_transformer_encoder, self).__init__()
+        self.input_dim = input_dim
         self.n_heads = n_heads
         self.n_layers = n_layers
-        self.dropout = dropout
         self.num_classes = num_classes
+        self.dropout = dropout
 
-        self.spatial_transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=self.input_dim_spatial,
-                nhead=self.n_heads,
-                dim_feedforward=self.input_dim_spatial*2,
-                dropout=self.dropout,
-                batch_first=True
-            ),
-            num_layers=self.n_layers
+        self.transformer_encoder = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=self.input_dim, nhead=self.n_heads, dropout=self.dropout, batch_first=True),
+            num_layers=N_LAYERS
         )
+        self.positional_encoding = nn.Parameter(torch.zeros(1, 700, self.input_dim))  # Assuming seq_length is 120
+        self.fc = nn.Linear(self.input_dim, self.num_classes)
+        self.dropout = nn.Dropout(self.dropout)
 
-        self.temporal_transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=self.input_dim_temporal,
-                nhead=self.n_heads,
-                dim_feedforward=self.input_dim_temporal*2,
-                dropout=self.dropout,
-                batch_first=True
-            ),
-            num_layers=self.n_layers
-        )
 
-        self.classifier = nn.Linear(self.input_dim_temporal*6, self.num_classes)
-        self.flatten = nn.Flatten()
     def forward(self, x):
-        # x = x.permute(0, 2, 1)
-        # input size: (B, 6, 12, 10)
-        # Reshape to (B*6, 12, 10)
-        x = x.view(x.size(0) * x.size(1), x.size(2), x.size(3))
-        # Spatial Transformer
-        x = self.spatial_transformer(x)
-        # Reshape for temporal to (B, 6, 12*10)
-        x = x.view(x.size(0) // 6, 6, x.size(1) * x.size(2))
-        # Temporal Transformer
-        x = self.temporal_transformer(x)
-        # x = x.permute(0, 2, 1)
-        # Use the output of the class token
-        x = self.flatten(x)
-        x = self.classifier(x) # b, 2
-    
+        # x shape: (batch_size, seq_length, input_dim)
+        batch_size, seq_length, _ = x.size()
+        # Add positional encoding
+        # x = x + self.positional_encoding[:, :seq_length, :].expand(batch_size, -1, -1)
+        # Apply dropout
+        # x = self.dropout(x)
+        # Pass through transformer encoder
+        x = self.transformer_encoder(x)
+        # Take the mean across the sequence length
+        x = x.mean(dim=1)
+
+        x = self.fc(x)  # Final linear layer
+        
         return x
 
 
@@ -278,193 +259,6 @@ def windowing(data, window_size, overlap):
     return windows
 
 
-bands = {
-    'P': (0.5, 10),
-    'QRS': (10, 40),
-    'H': (0.5, 5),
-    'ST':  (0.05, 1),
-}
-
-def compute_psd_bands(windows, fs, bands, nperseg=None, noverlap=None):
-   
-    n_windows, win_size, n_channels = windows.shape
-    if nperseg is None:
-        nperseg = win_size
-    if noverlap is None:
-        noverlap = nperseg // 2
-
-    # Compute freq vector once (from the first window & channel)
-    freqs, _ = welch(windows[0, :, 0], fs=fs,
-                     nperseg=nperseg, noverlap=noverlap)
-
-    band_names = list(bands.keys())
-    n_bands = len(band_names)
-    psd_bands = np.zeros((n_windows, n_channels, n_bands))
-
-    # Pre‐compute index masks for each band
-    band_masks = []
-    for band in band_names:
-        fmin, fmax = bands[band]
-        mask = np.logical_and(freqs >= fmin, freqs <= fmax)
-        band_masks.append(mask)
-
-    # Loop over windows and channels
-    for i in range(n_windows):
-        for ch in range(n_channels):
-            _, Pxx = welch(windows[i, :, ch], fs=fs,
-                           nperseg=nperseg, noverlap=noverlap)
-            # average PSD within each band
-            for j, mask in enumerate(band_masks):
-                psd_bands[i, ch, j] = Pxx[mask].mean()
-
-    return psd_bands, freqs, band_names
-
-def embed_seq(time_series, tau, embedding_dimension):
-    if not type(time_series) == np.ndarray:
-        typed_time_series = np.asarray(time_series)
-    else:
-        typed_time_series = time_series
-
-    shape = (typed_time_series.size - tau * (embedding_dimension - 1),
-             embedding_dimension)
-
-    strides = (typed_time_series.itemsize, tau * typed_time_series.itemsize)
-
-    return np.lib.stride_tricks.as_strided(typed_time_series,
-                                           shape=shape,
-                                           strides=strides)
-def sample_entropy(eeg: np.ndarray, **kwargs) -> np.ndarray:
-    N = len(eeg)
-    M = 5
-    R = 1.0
-
-    Em = embed_seq(eeg, 1, M)
-    A = np.tile(Em, (len(Em), 1, 1))
-    B = np.transpose(A, [1, 0, 2])
-    D = np.abs(A - B)
-    InRange = np.max(D, axis=2) <= R
-    np.fill_diagonal(InRange, 0)
-
-    Cm = InRange.sum(axis=0)
-    Dp = np.abs(
-        np.tile(eeg[M:], (N - M, 1)) -
-        np.tile(eeg[M:], (N - M, 1)).T)
-
-    Cmp = np.logical_and(Dp <= R, InRange[:-1, :-1]).sum(axis=0)
-
-    Samp_En = np.log(np.sum(Cm + 1e-100) / np.sum(Cmp + 1e-100))
-
-    return Samp_En
-
-
-def HFD(eeg: np.ndarray, **kwargs) -> np.ndarray:
-    L = []
-    x = []
-    N = len(eeg)
-    K_max = int(np.floor(N / 2))
-    for k in range(1, K_max):
-        Lk = []
-        for m in range(0, k):
-            Lmk = 0
-            for i in range(1, int(np.floor((N - m) / k))):
-                Lmk += abs(eeg[m + i * k] - eeg[m + i * k - k])
-            Lmk = Lmk * (N - 1) / np.floor((N - m) / float(k)) / k
-            Lk.append(Lmk)
-        L.append(np.log(np.mean(Lk)))
-        x.append([np.log(float(1) / k), 1])
-
-    (p, _, _, _) = np.linalg.lstsq(x, L, rcond=None)
-    return p[0]
-
-
-
-
-
-#     return psd_bands, freqs, band_names
-from scipy.stats import kurtosis, skew
-def time_and_complexity(windows: np.ndarray) -> np.ndarray:
-
-    n_windows, _, n_channels = windows.shape
-
-    # Preallocate arrays
-    mean_arr   = np.zeros((n_windows, n_channels))
-    std_arr    = np.zeros((n_windows, n_channels))
-    sampen_arr = np.zeros((n_windows, n_channels))
-    kurt_arr   = np.zeros((n_windows, n_channels))
-    skew_arr   = np.zeros((n_windows, n_channels))
-    hfd_arr    = np.zeros((n_windows, n_channels))
-
-    for w in range(n_windows):
-        for ch in range(n_channels):
-            seg = windows[w, ch, :]
-            mean_arr[w, ch]   = np.mean(seg)
-            std_arr[w, ch]    = np.std(seg)
-            sampen_arr[w, ch] = sample_entropy(seg)
-            kurt_arr[w, ch]   = kurtosis(seg)
-            skew_arr[w, ch]   = skew(seg)
-            hfd_arr[w, ch]    = HFD(seg)
-
-    # stack into (n_windows, n_channels, 6)
-    return np.stack(
-        [mean_arr,
-         std_arr,
-         sampen_arr,
-         kurt_arr,
-         skew_arr,
-         hfd_arr],
-        axis=2
-    )
-
-
-def feature_extractor(signals: np.ndarray) -> np.ndarray:
-    """
-    signals: shape (n_channels, n_samples)
-    returns: features shape (n_windows, n_channels, n_psd_bands + 6)
-    """
-    # 1) Window the signals
-    window_signals = windowing(signals, window_size=200, overlap=100)
-    #    shape = (n_windows, n_channels, n_samples)
-
-    # 2) PSD bands per window & channel
-    psd, freqs, band_names = compute_psd_bands(
-        window_signals, fs=100, bands=bands
-
-    )
-
-
-    # 3) Time & complexity features per window & channel
-    tc_feats = time_and_complexity(window_signals)
- 
-    features = np.concatenate([psd, tc_feats], axis=2)
-
-    return features
-
-
-
-class SignalDataset(Dataset):
-    def __init__(self, data_folder, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7):
-        self.records = find_records(data_folder)
-        self.data_folder = data_folder
-        self.desired_samping_rate = desired_samping_rate
-        self.low_cut = low_cut
-        self.high_cut = high_cut
-        self.desired_lenght = desired_lenght
-
-    def __len__(self):
-        return len(self.records)
-
-    def __getitem__(self, idx):
-        record_path = os.path.join(self.data_folder, self.records[idx])
-        #this parameter is fixed for now 
-        signals, label, source = load_and_process_signal_train(record_path, 
-                                                desired_samping_rate=self.desired_samping_rate, 
-                                                low_cut=self.low_cut, high_cut=self.high_cut, 
-                                                desired_lenght=self.desired_lenght)
-        signals_features = feature_extractor(signals)
-        #signals_features shape should be (number of windows, 12, 10)
-        signals_features = torch.tensor(signals, dtype=torch.float32)  # Convert to PyTorch tensor
-        label = torch.tensor(label, dtype=torch.long)  # Convert to PyTorch tensor
-        return signals_features, label
 
 
 # Train your model.
@@ -490,24 +284,27 @@ def train_model(data_folder, model_folder, verbose):
 
         signals, label, source = load_and_process_signal_train(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
         print(f"signals shape: {signals.shape}, label: {label}, source: {source}")
+        print(signals.shape)
 
-        try:
-            if source == 'CODE-15%':
-                print(f"Skipping record {record} due to source CODE-15%")
-                continue
-        except Exception as e:
-            print(f"Error processing record {record}: {e}")
-            continue
 
-        signals_features = feature_extractor(signals)
+        # try:
+        #     if source == 'CODE-15%':
+        #         print(f"Skipping record {record} due to source CODE-15%")
+        #         continue
+        # except Exception as e:
+        #     print(f"Error processing record {record}: {e}")
+        #     continue
 
-        X_train.append(signals_features)
+        
+
+        X_train.append(signals)
         y_train.append(label)
 
         
     X_train = np.array(X_train)
     y_train = np.array(y_train)
 
+    print(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
     # else:
     #     print ("Loading the data from the saved files...")
     #     X_train = np.load(os.path.join(data_folder, "X_train.npy"))
@@ -528,13 +325,12 @@ def train_model(data_folder, model_folder, verbose):
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = simple_transformer_encoder(input_dim_spatial=SPATIAL_INPUT_DIM,
-                                       input_dim_temporal=TEMPORAL_INPUT_DIM,
-                                       n_heads=N_HEADS, 
-                                       n_layers=N_LAYERS, 
-                                       dropout=DROPOUT, 
-                                       num_classes=NUM_CLASSES,
-                                       ).to(DEVICE)
+    model = simple_transformer_encoder(input_dim=12,
+                                        n_heads=N_HEADS, 
+                                        n_layers=N_LAYERS, 
+                                        dropout=DROPOUT, 
+                                        num_classes=NUM_CLASSES).to(DEVICE)
+                                       
     
     num_0s = np.sum(y_train == 0)
     num_1s = np.sum(y_train == 1)
@@ -599,13 +395,11 @@ def load_model(model_folder, verbose):
 
     if verbose:
         print('Extracting features and labels from the data...')
-    model = simple_transformer_encoder(input_dim_spatial=SPATIAL_INPUT_DIM,
-                                       input_dim_temporal=TEMPORAL_INPUT_DIM,
-                                       n_heads=N_HEADS, 
-                                       n_layers=N_LAYERS, 
-                                       dropout=DROPOUT, 
-                                       num_classes=NUM_CLASSES,
-                                       ).to(DEVICE)
+    model = simple_transformer_encoder(input_dim=12,
+                                        n_heads=N_HEADS, 
+                                        n_layers=N_LAYERS, 
+                                        dropout=DROPOUT, 
+                                        num_classes=NUM_CLASSES).to(DEVICE)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
@@ -619,12 +413,11 @@ def load_model(model_folder, verbose):
 def run_model(record, model, verbose):
     signals = load_and_process_signal_test(record, desired_samping_rate=100, low_cut=0.5, high_cut=45, desired_lenght=7)
     
-    signals_features = feature_extractor(signals)
 
     if len(signals.shape) > 2:
-        signals_features = model.scaler.transform(signals_features.reshape(signals_features.shape[0], -1)).reshape(signals_features.shape)  
+        signals_features = model.scaler.transform(signals.reshape(signals.shape[0], -1)).reshape(signals.shape)  
     else:
-        signals_features = model.scaler.transform(signals_features.reshape(1, -1)).reshape(signals_features.shape)
+        signals_features = model.scaler.transform(signals.reshape(1, -1)).reshape(signals.shape)
     signals_features = torch.tensor(signals_features, dtype=torch.float32).unsqueeze(0).to(DEVICE)  # shape: (1, seq_length, channels)
     
 
