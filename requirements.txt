@@ -70,6 +70,9 @@ threadpoolctl==3.6.0
 --extra-index-url https://download.pytorch.org/whl/cu118
 torch==2.6.0
 neurokit2==0.2.11
+PyWavelets==1.8.0
+
+
 
 torchaudio==2.6.0
 torchvision==0.21.0
