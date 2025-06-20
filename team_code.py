@@ -115,7 +115,7 @@ class FocalLoss(nn.Module):
 seed_everything(42)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-EPOCHS = 100
+EPOCHS = 150
 LEARNING_RATE = 0.001
 SPATIAL_INPUT_DIM = 10
 TEMPORAL_INPUT_DIM = 120
