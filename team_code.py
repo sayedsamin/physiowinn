@@ -221,147 +221,862 @@ def normalize_signal(signal):
         # Handle the case of a flat signal to avoid division by zero
         return np.zeros_like(signal)
 
-def load_and_process_signal_train(record,
-                                  desired_sampling_rate=100,
-                                  train=True,
-                                  feature_medians=None):
-    """
-    Load, preprocess ECG signals and extract features using NeuroKit2.
+# def load_and_process_signal_train(record,
+#                                   desired_sampling_rate=100,
+#                                   train=True,
+#                                   feature_medians=None):
+#     """
+#     Load, preprocess ECG signals and extract features using NeuroKit2.
     
+#     Args:
+#         record: The record identifier/path
+#         desired_sampling_rate: Target sampling rate (default: 100 Hz)
+#         train: Whether this is training data
+#         feature_medians: Dictionary of median values for imputation (for test data)
+    
+#     Returns:
+#         If train=True: features_array, label, source, feature_medians
+#         If train=False: features_array
+#     """
+#     signals, fields = load_signals(record)
+#     original_fs = fields["fs"]
+    
+#     # Calculate expected length after resampling once (for consistency)
+#     expected_length = int(len(signals) * desired_sampling_rate / original_fs)
+    
+#     # 1) Process all leads
+#     n_leads = signals.shape[1] if len(signals.shape) > 1 else 1
+#     processed_signals = np.zeros((expected_length, n_leads))
+#     features_list = []
+#     feature_names = [
+#         'Mean_QRS_Duration_ms', 'Std_QRS_Duration_ms',
+#         'Mean_QT_Interval_ms', 'Std_QT_Interval_ms',
+#         'Mean_R_Amplitude', 'Std_R_Amplitude'
+#     ]
+    
+#     # If signals is single-lead, reshape for consistency
+#     if len(signals.shape) == 1:
+#         signals = signals.reshape(-1, 1)
+    
+#     # Process each lead with NeuroKit2
+#     print(f"\nProcessing {n_leads} leads with NeuroKit2...")
+#     for i in range(n_leads):
+#         ecg_signal = signals[:, i]
+#         lead_features = {name: np.nan for name in feature_names}
+        
+#         try:
+#             # 1. Normalize Signal to [-1, 1]
+#             normalized_signal = normalize_signal(ecg_signal)
+            
+#             # 2. Resample using NeuroKit2 with EXACT length specified
+#             resampled_signal = nk.signal_resample(
+#                 normalized_signal,
+#                 sampling_rate=original_fs,
+#                 desired_sampling_rate=desired_sampling_rate,
+#                 desired_length=expected_length  # Force exact length
+#             )
+            
+#             # Verify length is as expected
+#             if len(resampled_signal) != expected_length:
+#                 print(f"Warning: Resampled signal length {len(resampled_signal)} doesn't match expected {expected_length}")
+#                 # Force correct length
+#                 if len(resampled_signal) < expected_length:
+#                     # Pad with edge values
+#                     resampled_signal = np.pad(resampled_signal, (0, expected_length - len(resampled_signal)), 'edge')
+#                 else:
+#                     # Truncate
+#                     resampled_signal = resampled_signal[:expected_length]
+            
+#             # 3. Clean using NeuroKit2 (applies appropriate filtering)
+#             cleaned_signal = nk.ecg_clean(resampled_signal, 
+#                                           sampling_rate=desired_sampling_rate, 
+#                                           method="neurokit")
+            
+#             # Store the processed signal
+#             processed_signals[:, i] = cleaned_signal
+            
+#             # 4. Find R-Peaks
+#             _, info = nk.ecg_peaks(cleaned_signal, sampling_rate=desired_sampling_rate)
+#             r_peaks = info['ECG_R_Peaks']
+            
+#             if len(r_peaks) < 2:
+#                 print(f"Lead {i+1}: Not enough R-peaks found. Will use median imputation.")
+#                 features_list.append(lead_features)  # Add NaN features for now
+#                 continue
+                
+#             # 5. Delineate Waveforms
+#             try:
+#                 _, waves_info = nk.ecg_delineate(cleaned_signal, r_peaks, 
+#                                                 sampling_rate=desired_sampling_rate, method="dwt")
+                
+#                 # 6. Calculate Features with safety checks
+#                 # Check if required wave points exist
+#                 if ('ECG_S_Peaks' not in waves_info or 'ECG_Q_Peaks' not in waves_info or
+#                     'ECG_T_Offsets' not in waves_info):
+#                     print(f"Lead {i+1}: Missing required wave points. Using median imputation.")
+#                     features_list.append(lead_features)
+#                     continue
+                
+#                 # Convert lists to arrays with safety
+#                 s_peaks = np.array(waves_info['ECG_S_Peaks'])
+#                 q_peaks = np.array(waves_info['ECG_Q_Peaks'])
+#                 t_offsets = np.array(waves_info['ECG_T_Offsets'])
+                
+#                 # Remove NaNs or invalid indices
+#                 valid_qrs = ~np.isnan(s_peaks) & ~np.isnan(q_peaks) & (s_peaks >= q_peaks)
+#                 valid_qt = ~np.isnan(t_offsets) & ~np.isnan(q_peaks) & (t_offsets >= q_peaks)
+                
+#                 # Calculate intervals only for valid points
+#                 if np.any(valid_qrs):
+#                     qrs_durations = (s_peaks[valid_qrs] - q_peaks[valid_qrs]) / desired_sampling_rate
+#                     lead_features['Mean_QRS_Duration_ms'] = np.mean(qrs_durations) * 1000
+#                     lead_features['Std_QRS_Duration_ms'] = np.std(qrs_durations) * 1000 if len(qrs_durations) > 1 else 0
+                
+#                 if np.any(valid_qt):
+#                     qt_intervals = (t_offsets[valid_qt] - q_peaks[valid_qt]) / desired_sampling_rate
+#                     lead_features['Mean_QT_Interval_ms'] = np.mean(qt_intervals) * 1000
+#                     lead_features['Std_QT_Interval_ms'] = np.std(qt_intervals) * 1000 if len(qt_intervals) > 1 else 0
+                
+#                 # R-peak amplitudes
+#                 lead_features['Mean_R_Amplitude'] = np.mean(cleaned_signal[r_peaks])
+#                 lead_features['Std_R_Amplitude'] = np.std(cleaned_signal[r_peaks])
+                
+#                 # print(f"Lead {i+1}: Processed and features extracted successfully.")
+                
+#             except Exception as e:
+#                 print(f"Lead {i+1}: Error during delineation: {e}")
+#                 # Keep NaN values for this lead
+            
+#         except Exception as e:
+#             print(f"Lead {i+1}: Error during processing: {e}")
+            
+#         features_list.append(lead_features)
+    
+#     # Convert to numpy array (still with NaN values)
+#     features_array = np.array([list(d.values()) for d in features_list])
+    
+#     # Safety check for NaN/Inf values
+#     nan_count = np.isnan(features_array).sum()
+#     inf_count = np.isinf(features_array).sum()
+#     if nan_count > 0 or inf_count > 0:
+#         print(f"Found {nan_count} NaN values and {inf_count} Inf values in features. Imputing...")
+    
+#     # TRAINING: Calculate and save median values for imputation
+#     if train:
+#         # Calculate median for each feature column, ignoring NaNs
+#         medians_by_lead = []
+#         for lead_idx in range(features_array.shape[0]):
+#             lead_medians = {}
+#             for j, feature_name in enumerate(feature_names):
+#                 lead_medians[feature_name] = np.nanmedian(features_array[lead_idx, j])
+#                 # Handle case where all values are NaN
+#                 if np.isnan(lead_medians[feature_name]):
+#                     lead_medians[feature_name] = 0.0
+#             medians_by_lead.append(lead_medians)
+        
+#         # Impute missing values in training data
+#         for lead_idx in range(features_array.shape[0]):
+#             for j, feature_name in enumerate(feature_names):
+#                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
+#                     features_array[lead_idx, j] = medians_by_lead[lead_idx][feature_name]
+        
+#         # Save medians for test data
+#         feature_medians = medians_by_lead
+        
+#     # TESTING: Apply saved median values
+#     elif feature_medians is not None:
+#         # Impute missing values in test data using training medians
+#         for lead_idx in range(min(features_array.shape[0], len(feature_medians))):
+#             for j, feature_name in enumerate(feature_names):
+#                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
+#                     features_array[lead_idx, j] = feature_medians[lead_idx][feature_name]
+    
+#     # Final safety: Replace any remaining NaN/Inf with zeros
+#     features_array = np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
+    
+#     if train:
+#         label = load_label(record)
+#         label = np.array(label).astype(np.long)
+#         source = get_source(load_header(record))
+#         return features_array, label, source, feature_medians
+#     else:
+#         return features_array
+
+# def load_and_process_signal_train(record,
+#                                   desired_sampling_rate=100,
+#                                   train=True,
+#                                   feature_medians=None):
+#     """
+#     Optimized function to load, preprocess ECG signals and extract features.
+#     Uses nanmean/nanstd to handle missing values more efficiently.
+    
+#     Args:
+#         record: The record identifier/path
+#         desired_sampling_rate: Target sampling rate (default: 100 Hz)
+#         train: Whether this is training data
+#         feature_medians: Dictionary of median values for imputation (for test data)
+    
+#     Returns:
+#         If train=True: features_array, label, source, feature_medians
+#         If train=False: features_array
+#     """
+#     # Load signal data
+#     signals, fields = load_signals(record)
+#     original_fs = fields["fs"]
+    
+#     # Calculate expected length once
+#     expected_length = int(len(signals) * desired_sampling_rate / original_fs)
+    
+#     # Setup
+#     n_leads = signals.shape[1] if len(signals.shape) > 1 else 1
+#     features_list = []
+#     feature_names = [
+#         'Mean_QRS_Duration_ms', 'Std_QRS_Duration_ms',
+#         'Mean_QT_Interval_ms', 'Std_QT_Interval_ms',
+#         'Mean_R_Amplitude', 'Std_R_Amplitude'
+#     ]
+    
+#     # Reshape if needed
+#     if len(signals.shape) == 1:
+#         signals = signals.reshape(-1, 1)
+    
+#     # Reduce print statements for speed
+#     # print(f"\nProcessing {n_leads} leads...")
+    
+#     # Process each lead
+#     for i in range(n_leads):
+#         ecg_signal = signals[:, i]
+#         lead_features = {name: np.nan for name in feature_names}
+        
+#         try:
+#             # 1. Fast normalization
+#             normalized_signal = normalize_signal(ecg_signal)
+            
+#             # 2. Faster resampling with exact length
+#             resampled_signal = nk.signal_resample(
+#                 normalized_signal,
+#                 sampling_rate=original_fs,
+#                 desired_sampling_rate=desired_sampling_rate,
+#                 desired_length=expected_length
+#             )
+            
+#             # 3. Use faster cleaning method - pantompkins is faster than neurokit
+#             cleaned_signal = nk.ecg_clean(
+#                 resampled_signal, 
+#                 sampling_rate=desired_sampling_rate, 
+#                 method="pantompkins"  # Faster method
+#             )
+            
+#             # 4. Faster R-peak detection
+#             _, info = nk.ecg_peaks(
+#                 cleaned_signal, 
+#                 sampling_rate=desired_sampling_rate,
+#                 method="pantompkins"  # Faster method
+#             )
+#             r_peaks = info['ECG_R_Peaks']
+            
+#             if len(r_peaks) < 2:
+#                 # Skip delineation if insufficient R-peaks
+#                 features_list.append(lead_features)
+#                 continue
+                
+#             # 5. Delineate waveforms
+#             try:
+#                 _, waves_info = nk.ecg_delineate(
+#                     cleaned_signal, 
+#                     r_peaks, 
+#                     sampling_rate=desired_sampling_rate, 
+#                     method="dwt"
+#                 )
+                
+#                 # 6. Direct calculation with nanmean/nanstd
+#                 if 'ECG_S_Peaks' in waves_info and 'ECG_Q_Peaks' in waves_info:
+#                     s_peaks = np.array(waves_info['ECG_S_Peaks'])
+#                     q_peaks = np.array(waves_info['ECG_Q_Peaks'])
+                    
+#                     # Calculate QRS durations directly, handling NaNs
+#                     qrs_durations = (s_peaks - q_peaks) / desired_sampling_rate
+#                     # Filter valid values
+#                     valid_qrs = ~np.isnan(qrs_durations) & (qrs_durations > 0)
+#                     if np.any(valid_qrs):
+#                         valid_qrs_durations = qrs_durations[valid_qrs]
+#                         lead_features['Mean_QRS_Duration_ms'] = np.nanmean(valid_qrs_durations) * 1000
+#                         lead_features['Std_QRS_Duration_ms'] = np.nanstd(valid_qrs_durations) * 1000 if len(valid_qrs_durations) > 1 else 0
+                
+#                 if 'ECG_T_Offsets' in waves_info and 'ECG_Q_Peaks' in waves_info:
+#                     t_offsets = np.array(waves_info['ECG_T_Offsets'])
+#                     q_peaks = np.array(waves_info['ECG_Q_Peaks'])
+                    
+#                     # Calculate QT intervals directly, handling NaNs
+#                     qt_intervals = (t_offsets - q_peaks) / desired_sampling_rate
+#                     # Filter valid values
+#                     valid_qt = ~np.isnan(qt_intervals) & (qt_intervals > 0)
+#                     if np.any(valid_qt):
+#                         valid_qt_intervals = qt_intervals[valid_qt]
+#                         lead_features['Mean_QT_Interval_ms'] = np.nanmean(valid_qt_intervals) * 1000
+#                         lead_features['Std_QT_Interval_ms'] = np.nanstd(valid_qt_intervals) * 1000 if len(valid_qt_intervals) > 1 else 0
+                
+#                 # R-peak amplitudes using nanmean/nanstd
+#                 lead_features['Mean_R_Amplitude'] = np.nanmean(cleaned_signal[r_peaks])
+#                 lead_features['Std_R_Amplitude'] = np.nanstd(cleaned_signal[r_peaks])
+                
+#             except Exception:
+#                 # Silent fail to improve speed
+#                 pass
+            
+#         except Exception:
+#             # Silent fail to improve speed
+#             pass
+            
+#         features_list.append(lead_features)
+    
+#     # Convert to numpy array
+#     features_array = np.array([list(d.values()) for d in features_list])
+    
+#     # Still need some imputation for missing features
+#     if train:
+#         # Calculate median for each feature column, ignoring NaNs
+#         medians_by_lead = []
+#         for lead_idx in range(features_array.shape[0]):
+#             lead_medians = {}
+#             for j, feature_name in enumerate(feature_names):
+#                 lead_medians[feature_name] = np.nanmedian(features_array[lead_idx, j])
+#                 # Handle case where all values are NaN
+#                 if np.isnan(lead_medians[feature_name]):
+#                     lead_medians[feature_name] = 0.0
+#             medians_by_lead.append(lead_medians)
+        
+#         # Impute missing values using vectorized operations
+#         for lead_idx in range(features_array.shape[0]):
+#             for j, feature_name in enumerate(feature_names):
+#                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
+#                     features_array[lead_idx, j] = medians_by_lead[lead_idx][feature_name]
+        
+#         feature_medians = medians_by_lead
+        
+#     elif feature_medians is not None:
+#         # Apply saved medians to test data
+#         for lead_idx in range(min(features_array.shape[0], len(feature_medians))):
+#             for j, feature_name in enumerate(feature_names):
+#                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
+#                     features_array[lead_idx, j] = feature_medians[lead_idx][feature_name]
+    
+#     # Final safety using vectorized operation
+#     features_array = np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
+    
+#     if train:
+#         label = load_label(record)
+#         label = np.array(label).astype(np.long)
+#         source = get_source(load_header(record))
+#         return features_array, label, source, feature_medians
+#     else:
+#         return features_array
+
+# def load_and_process_signal_train(record,
+#                                   desired_sampling_rate=100,
+#                                   train=True,
+#                                   feature_medians=None):
+#     """
+#     Optimized function to load and extract only QRS duration features.
+    
+#     Args:
+#         record: The record identifier/path
+#         desired_sampling_rate: Target sampling rate (default: 100 Hz)
+#         train: Whether this is training data
+#         feature_medians: Dictionary of median values for imputation (for test data)
+    
+#     Returns:
+#         If train=True: features_array, label, source, feature_medians
+#         If train=False: features_array
+#     """
+#     # Load signal data
+#     signals, fields = load_signals(record)
+#     original_fs = fields["fs"]
+    
+#     # Calculate expected length once
+#     expected_length = int(len(signals) * desired_sampling_rate / original_fs)
+    
+#     # Setup
+#     n_leads = signals.shape[1] if len(signals.shape) > 1 else 1
+#     features_list = []
+    
+#     # Simplified feature names - only QRS duration features
+#     feature_names = [
+#         'Mean_QRS_Duration_ms', 'Std_QRS_Duration_ms'
+#     ]
+    
+#     # Reshape if needed
+#     if len(signals.shape) == 1:
+#         signals = signals.reshape(-1, 1)
+    
+#     # Process each lead
+#     for i in range(n_leads):
+#         ecg_signal = signals[:, i]
+#         lead_features = {name: np.nan for name in feature_names}
+        
+#         try:
+#             # 1. Fast normalization
+#             normalized_signal = normalize_signal(ecg_signal)
+            
+#             # 2. Faster resampling with exact length
+#             resampled_signal = nk.signal_resample(
+#                 normalized_signal,
+#                 sampling_rate=original_fs,
+#                 desired_sampling_rate=desired_sampling_rate,
+#                 desired_length=expected_length
+#             )
+            
+#             # 3. Use faster cleaning method - pantompkins is faster than neurokit
+#             cleaned_signal = nk.ecg_clean(
+#                 resampled_signal, 
+#                 sampling_rate=desired_sampling_rate, 
+#                 method="pantompkins"  # Faster method
+#             )
+            
+#             # 4. Faster R-peak detection
+#             _, info = nk.ecg_peaks(
+#                 cleaned_signal, 
+#                 sampling_rate=desired_sampling_rate,
+#                 method="pantompkins"  # Faster method
+#             )
+#             r_peaks = info['ECG_R_Peaks']
+            
+#             if len(r_peaks) < 2:
+#                 # Skip delineation if insufficient R-peaks
+#                 features_list.append(lead_features)
+#                 continue
+                
+#             # 5. Delineate waveforms
+#             try:
+#                 _, waves_info = nk.ecg_delineate(
+#                     cleaned_signal, 
+#                     r_peaks, 
+#                     sampling_rate=desired_sampling_rate, 
+#                     method="dwt"
+#                 )
+                
+#                 # 6. Calculate only QRS durations
+#                 if 'ECG_S_Peaks' in waves_info and 'ECG_Q_Peaks' in waves_info:
+#                     s_peaks = np.array(waves_info['ECG_S_Peaks'])
+#                     q_peaks = np.array(waves_info['ECG_Q_Peaks'])
+                    
+#                     # Calculate QRS durations directly, handling NaNs
+#                     qrs_durations = (s_peaks - q_peaks) / desired_sampling_rate
+#                     # Filter valid values
+#                     valid_qrs = ~np.isnan(qrs_durations) & (qrs_durations > 0)
+#                     if np.any(valid_qrs):
+#                         valid_qrs_durations = qrs_durations[valid_qrs]
+#                         lead_features['Mean_QRS_Duration_ms'] = np.nanmean(valid_qrs_durations) * 1000
+#                         lead_features['Std_QRS_Duration_ms'] = np.nanstd(valid_qrs_durations) * 1000 if len(valid_qrs_durations) > 1 else 0
+                
+#                 # Removed QT interval and R amplitude calculations
+                
+#             except Exception:
+#                 # Silent fail to improve speed
+#                 pass
+            
+#         except Exception:
+#             # Silent fail to improve speed
+#             pass
+            
+#         features_list.append(lead_features)
+    
+#     # Convert to numpy array
+#     features_array = np.array([list(d.values()) for d in features_list])
+    
+#     # Still need some imputation for missing features
+#     if train:
+#         # Calculate median for each feature column, ignoring NaNs
+#         medians_by_lead = []
+#         for lead_idx in range(features_array.shape[0]):
+#             lead_medians = {}
+#             for j, feature_name in enumerate(feature_names):
+#                 lead_medians[feature_name] = np.nanmedian(features_array[lead_idx, j])
+#                 # Handle case where all values are NaN
+#                 if np.isnan(lead_medians[feature_name]):
+#                     lead_medians[feature_name] = 0.0
+#             medians_by_lead.append(lead_medians)
+        
+#         # Impute missing values using vectorized operations
+#         for lead_idx in range(features_array.shape[0]):
+#             for j, feature_name in enumerate(feature_names):
+#                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
+#                     features_array[lead_idx, j] = medians_by_lead[lead_idx][feature_name]
+        
+#         feature_medians = medians_by_lead
+        
+#     elif feature_medians is not None:
+#         # Apply saved medians to test data
+#         for lead_idx in range(min(features_array.shape[0], len(feature_medians))):
+#             for j, feature_name in enumerate(feature_names):
+#                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
+#                     features_array[lead_idx, j] = feature_medians[lead_idx][feature_name]
+    
+#     # Final safety using vectorized operation
+#     features_array = np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
+    
+#     if train:
+#         label = load_label(record)
+#         label = np.array(label).astype(np.long)
+#         source = get_source(load_header(record))
+#         return features_array, label, source, feature_medians
+#     else:
+#         return features_array
+
+
+# import multiprocessing
+# from functools import partial
+
+# def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate, expected_length):
+#     """Process a single lead and extract QRS duration features."""
+#     ecg_signal = lead_data
+#     feature_names = ['Mean_QRS_Duration_ms', 'Std_QRS_Duration_ms']
+#     lead_features = {name: np.nan for name in feature_names}
+    
+#     try:
+#         # 1. Fast normalization
+#         normalized_signal = normalize_signal(ecg_signal)
+        
+#         # 2. Faster resampling with exact length
+#         resampled_signal = nk.signal_resample(
+#             normalized_signal,
+#             sampling_rate=original_fs,
+#             desired_sampling_rate=desired_sampling_rate,
+#             desired_length=expected_length
+#         )
+        
+#         # 3. Use faster cleaning method - pantompkins is faster than neurokit
+#         cleaned_signal = nk.ecg_clean(
+#             resampled_signal, 
+#             sampling_rate=desired_sampling_rate, 
+#             method="pantompkins"
+#         )
+        
+#         # 4. Faster R-peak detection
+#         _, info = nk.ecg_peaks(
+#             cleaned_signal, 
+#             sampling_rate=desired_sampling_rate,
+#             method="pantompkins"
+#         )
+#         r_peaks = info['ECG_R_Peaks']
+        
+#         if len(r_peaks) < 2:
+#             return lead_idx, lead_features
+            
+#         # 5. Delineate waveforms
+#         try:
+#             _, waves_info = nk.ecg_delineate(
+#                 cleaned_signal, 
+#                 r_peaks, 
+#                 sampling_rate=desired_sampling_rate, 
+#                 method="dwt"
+#             )
+            
+#             # 6. Calculate only QRS durations
+#             if 'ECG_S_Peaks' in waves_info and 'ECG_Q_Peaks' in waves_info:
+#                 s_peaks = np.array(waves_info['ECG_S_Peaks'])
+#                 q_peaks = np.array(waves_info['ECG_Q_Peaks'])
+                
+#                 # Calculate QRS durations directly, handling NaNs
+#                 qrs_durations = (s_peaks - q_peaks) / desired_sampling_rate
+#                 # Filter valid values
+#                 valid_qrs = ~np.isnan(qrs_durations) & (qrs_durations > 0)
+#                 if np.any(valid_qrs):
+#                     valid_qrs_durations = qrs_durations[valid_qrs]
+#                     lead_features['Mean_QRS_Duration_ms'] = np.nanmean(valid_qrs_durations) * 1000
+#                     lead_features['Std_QRS_Duration_ms'] = np.nanstd(valid_qrs_durations) * 1000 if len(valid_qrs_durations) > 1 else 0
+            
+#         except Exception:
+#             # Silent fail to improve speed
+#             pass
+        
+#     except Exception:
+#         # Silent fail to improve speed
+#         pass
+        
+#     return lead_idx, lead_features
+
+# def load_and_process_signal_train(record,
+#                                   desired_sampling_rate=100,
+#                                   train=True,
+#                                   feature_medians=None):
+#     """
+#     Parallelized function to load and extract QRS duration features.
+#     Uses one CPU core per lead for faster processing.
+    
+#     Args:
+#         record: The record identifier/path
+#         desired_sampling_rate: Target sampling rate (default: 100 Hz)
+#         train: Whether this is training data
+#         feature_medians: Dictionary of median values for imputation (for test data)
+    
+#     Returns:
+#         If train=True: features_array, label, source, feature_medians
+#         If train=False: features_array
+#     """
+#     # Load signal data
+#     signals, fields = load_signals(record)
+#     original_fs = fields["fs"]
+    
+#     # Calculate expected length once
+#     expected_length = int(len(signals) * desired_sampling_rate / original_fs)
+    
+#     # Setup
+#     n_leads = signals.shape[1] if len(signals.shape) > 1 else 1
+#     feature_names = ['Mean_QRS_Duration_ms', 'Std_QRS_Duration_ms']
+    
+#     # Reshape if needed
+#     if len(signals.shape) == 1:
+#         signals = signals.reshape(-1, 1)
+    
+#     # Prepare lead data for parallel processing
+#     lead_signals = [signals[:, i] for i in range(n_leads)]
+    
+#     # Create a partially bound function with fixed parameters
+#     process_lead = partial(
+#         process_single_lead,
+#         original_fs=original_fs,
+#         desired_sampling_rate=desired_sampling_rate,
+#         expected_length=expected_length
+#     )
+    
+#     # Determine number of cores to use - one per lead, but limited by system cores
+#     num_cores = min(n_leads, multiprocessing.cpu_count())
+    
+#     # Process leads in parallel
+#     features_list = [{name: np.nan for name in feature_names} for _ in range(n_leads)]
+    
+#     with multiprocessing.Pool(processes=num_cores) as pool:
+#         # Map each lead to a process with its index
+#         results = pool.starmap(
+#             process_lead,
+#             [(lead_signals[i], i) for i in range(n_leads)]
+#         )
+    
+#     # Reorganize results in correct lead order
+#     for lead_idx, lead_features in results:
+#         features_list[lead_idx] = lead_features
+    
+#     # Convert to numpy array
+#     features_array = np.array([list(d.values()) for d in features_list])
+    
+#     # Imputation for missing features
+#     if train:
+#         # Calculate median for each feature column, ignoring NaNs
+#         medians_by_lead = []
+#         for lead_idx in range(features_array.shape[0]):
+#             lead_medians = {}
+#             for j, feature_name in enumerate(feature_names):
+#                 lead_medians[feature_name] = np.nanmedian(features_array[lead_idx, j])
+#                 # Handle case where all values are NaN
+#                 if np.isnan(lead_medians[feature_name]):
+#                     lead_medians[feature_name] = 0.0
+#             medians_by_lead.append(lead_medians)
+        
+#         # Impute missing values using vectorized operations
+#         for lead_idx in range(features_array.shape[0]):
+#             for j, feature_name in enumerate(feature_names):
+#                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
+#                     features_array[lead_idx, j] = medians_by_lead[lead_idx][feature_name]
+        
+#         feature_medians = medians_by_lead
+        
+#     elif feature_medians is not None:
+#         # Apply saved medians to test data
+#         for lead_idx in range(min(features_array.shape[0], len(feature_medians))):
+#             for j, feature_name in enumerate(feature_names):
+#                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
+#                     features_array[lead_idx, j] = feature_medians[lead_idx][feature_name]
+    
+#     # Final safety using vectorized operation
+#     features_array = np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
+    
+#     if train:
+#         label = load_label(record)
+#         label = np.array(label).astype(np.long)
+#         source = get_source(load_header(record))
+#         return features_array, label, source, feature_medians
+#     else:
+#         return features_array
+
+import multiprocessing
+from functools import partial
+import numpy as np
+import torch
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
+import neurokit2 as nk
+from helper_code import load_signals, load_label, load_header, get_source
+
+def normalize_signal(signal):
+    """
+    Normalizes a signal to the range [-1, 1] using min-max scaling.
+
     Args:
-        record: The record identifier/path
-        desired_sampling_rate: Target sampling rate (default: 100 Hz)
-        train: Whether this is training data
-        feature_medians: Dictionary of median values for imputation (for test data)
-    
+        signal (np.ndarray): The input signal array.
+
     Returns:
-        If train=True: features_array, label, source, feature_medians
-        If train=False: features_array
+        np.ndarray: The normalized signal.
     """
+    min_val = np.min(signal)
+    max_val = np.max(signal)
+    if max_val - min_val > 0:
+        # Formula: -1 + 2 * (x - min) / (max - min)
+        return -1 + 2 * (signal - min_val) / (max_val - min_val)
+    else:
+        # Handle the case of a flat signal to avoid division by zero
+        return np.zeros_like(signal)
+
+def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate, expected_length, feature_names):
+    """Process a single lead and extract all requested features."""
+    ecg_signal = lead_data
+    lead_features = {name: np.nan for name in feature_names}
+    
+    try:
+        # 1. Fast normalization
+        normalized_signal = normalize_signal(ecg_signal)
+        
+        # 2. Faster resampling with exact length
+        resampled_signal = nk.signal_resample(
+            normalized_signal,
+            sampling_rate=original_fs,
+            desired_sampling_rate=desired_sampling_rate,
+            desired_length=expected_length
+        )
+        
+        # 3. Use faster cleaning method - pantompkins is faster than neurokit
+        cleaned_signal = nk.ecg_clean(
+            resampled_signal, 
+            sampling_rate=desired_sampling_rate, 
+            method="pantompkins"
+        )
+        
+        # 4. Faster R-peak detection
+        _, info = nk.ecg_peaks(
+            cleaned_signal, 
+            sampling_rate=desired_sampling_rate,
+            method="pantompkins"
+        )
+        r_peaks = info['ECG_R_Peaks']
+        
+        if len(r_peaks) < 2:
+            return lead_idx, lead_features
+            
+        # 5. Delineate waveforms
+        try:
+            _, waves_info = nk.ecg_delineate(
+                cleaned_signal, 
+                r_peaks, 
+                sampling_rate=desired_sampling_rate, 
+                method="dwt"
+            )
+            
+            # 6. Calculate all the requested features
+            # QRS Duration features
+            if 'ECG_S_Peaks' in waves_info and 'ECG_Q_Peaks' in waves_info:
+                s_peaks = np.array(waves_info['ECG_S_Peaks'])
+                q_peaks = np.array(waves_info['ECG_Q_Peaks'])
+                
+                # Calculate QRS durations directly, handling NaNs
+                qrs_durations = (s_peaks - q_peaks) / desired_sampling_rate
+                # Filter valid values
+                valid_qrs = ~np.isnan(qrs_durations) & (qrs_durations > 0)
+                if np.any(valid_qrs):
+                    valid_qrs_durations = qrs_durations[valid_qrs]
+                    lead_features['Mean_QRS_Duration_ms'] = np.nanmean(valid_qrs_durations) * 1000
+                    lead_features['Std_QRS_Duration_ms'] = np.nanstd(valid_qrs_durations) * 1000 if len(valid_qrs_durations) > 1 else 0
+            
+            # QT Interval features
+            if 'ECG_T_Offsets' in waves_info and 'ECG_Q_Peaks' in waves_info:
+                t_offsets = np.array(waves_info['ECG_T_Offsets'])
+                q_peaks = np.array(waves_info['ECG_Q_Peaks'])
+                
+                # Calculate QT intervals directly, handling NaNs
+                qt_intervals = (t_offsets - q_peaks) / desired_sampling_rate
+                # Filter valid values
+                valid_qt = ~np.isnan(qt_intervals) & (qt_intervals > 0)
+                if np.any(valid_qt):
+                    valid_qt_intervals = qt_intervals[valid_qt]
+                    lead_features['Mean_QT_Interval_ms'] = np.nanmean(valid_qt_intervals) * 1000
+                    lead_features['Std_QT_Interval_ms'] = np.nanstd(valid_qt_intervals) * 1000 if len(valid_qt_intervals) > 1 else 0
+            
+            # R-peak amplitude features
+            if len(r_peaks) > 0:
+                lead_features['Mean_R_Amplitude'] = np.nanmean(cleaned_signal[r_peaks])
+                lead_features['Std_R_Amplitude'] = np.nanstd(cleaned_signal[r_peaks])
+            
+        except Exception:
+            # Silent fail to improve speed
+            pass
+        
+    except Exception:
+        # Silent fail to improve speed
+        pass
+        
+    return lead_idx, lead_features
+
+def process_leads_in_parallel(signals, n_leads, original_fs, desired_sampling_rate, expected_length, feature_names):
+    """Process all leads in parallel using CPU cores."""
+    # Prepare lead data for parallel processing
+    lead_signals = [signals[:, i] for i in range(n_leads)]
+    
+    # Create a partially bound function with fixed parameters
+    process_lead = partial(
+        process_single_lead,
+        original_fs=original_fs,
+        desired_sampling_rate=desired_sampling_rate,
+        expected_length=expected_length,
+        feature_names=feature_names
+    )
+    
+    # Determine number of cores to use - one per lead, but limited by system cores
+    num_cores = min(n_leads, multiprocessing.cpu_count())
+    
+    # Process leads in parallel
+    features_list = [{name: np.nan for name in feature_names} for _ in range(n_leads)]
+    
+    with multiprocessing.Pool(processes=num_cores) as pool:
+        # Map each lead to a process with its index
+        results = pool.starmap(
+            process_lead,
+            [(lead_signals[i], i) for i in range(n_leads)]
+        )
+    
+    # Reorganize results in correct lead order
+    for lead_idx, lead_features in results:
+        features_list[lead_idx] = lead_features
+        
+    return features_list
+
+def process_single_record(record, desired_sampling_rate=100, train=True, feature_medians=None):
+    """Process a single ECG record and extract all features."""
+    # Load signal data
     signals, fields = load_signals(record)
     original_fs = fields["fs"]
     
-    # Calculate expected length after resampling once (for consistency)
+    # Calculate expected length once
     expected_length = int(len(signals) * desired_sampling_rate / original_fs)
     
-    # 1) Process all leads
+    # Setup
     n_leads = signals.shape[1] if len(signals.shape) > 1 else 1
-    processed_signals = np.zeros((expected_length, n_leads))
-    features_list = []
     feature_names = [
         'Mean_QRS_Duration_ms', 'Std_QRS_Duration_ms',
         'Mean_QT_Interval_ms', 'Std_QT_Interval_ms',
         'Mean_R_Amplitude', 'Std_R_Amplitude'
     ]
     
-    # If signals is single-lead, reshape for consistency
+    # Reshape if needed
     if len(signals.shape) == 1:
         signals = signals.reshape(-1, 1)
     
-    # Process each lead with NeuroKit2
-    print(f"\nProcessing {n_leads} leads with NeuroKit2...")
-    for i in range(n_leads):
-        ecg_signal = signals[:, i]
-        lead_features = {name: np.nan for name in feature_names}
-        
-        try:
-            # 1. Normalize Signal to [-1, 1]
-            normalized_signal = normalize_signal(ecg_signal)
-            
-            # 2. Resample using NeuroKit2 with EXACT length specified
-            resampled_signal = nk.signal_resample(
-                normalized_signal,
-                sampling_rate=original_fs,
-                desired_sampling_rate=desired_sampling_rate,
-                desired_length=expected_length  # Force exact length
-            )
-            
-            # Verify length is as expected
-            if len(resampled_signal) != expected_length:
-                print(f"Warning: Resampled signal length {len(resampled_signal)} doesn't match expected {expected_length}")
-                # Force correct length
-                if len(resampled_signal) < expected_length:
-                    # Pad with edge values
-                    resampled_signal = np.pad(resampled_signal, (0, expected_length - len(resampled_signal)), 'edge')
-                else:
-                    # Truncate
-                    resampled_signal = resampled_signal[:expected_length]
-            
-            # 3. Clean using NeuroKit2 (applies appropriate filtering)
-            cleaned_signal = nk.ecg_clean(resampled_signal, 
-                                          sampling_rate=desired_sampling_rate, 
-                                          method="neurokit")
-            
-            # Store the processed signal
-            processed_signals[:, i] = cleaned_signal
-            
-            # 4. Find R-Peaks
-            _, info = nk.ecg_peaks(cleaned_signal, sampling_rate=desired_sampling_rate)
-            r_peaks = info['ECG_R_Peaks']
-            
-            if len(r_peaks) < 2:
-                print(f"Lead {i+1}: Not enough R-peaks found. Will use median imputation.")
-                features_list.append(lead_features)  # Add NaN features for now
-                continue
-                
-            # 5. Delineate Waveforms
-            try:
-                _, waves_info = nk.ecg_delineate(cleaned_signal, r_peaks, 
-                                                sampling_rate=desired_sampling_rate, method="dwt")
-                
-                # 6. Calculate Features with safety checks
-                # Check if required wave points exist
-                if ('ECG_S_Peaks' not in waves_info or 'ECG_Q_Peaks' not in waves_info or
-                    'ECG_T_Offsets' not in waves_info):
-                    print(f"Lead {i+1}: Missing required wave points. Using median imputation.")
-                    features_list.append(lead_features)
-                    continue
-                
-                # Convert lists to arrays with safety
-                s_peaks = np.array(waves_info['ECG_S_Peaks'])
-                q_peaks = np.array(waves_info['ECG_Q_Peaks'])
-                t_offsets = np.array(waves_info['ECG_T_Offsets'])
-                
-                # Remove NaNs or invalid indices
-                valid_qrs = ~np.isnan(s_peaks) & ~np.isnan(q_peaks) & (s_peaks >= q_peaks)
-                valid_qt = ~np.isnan(t_offsets) & ~np.isnan(q_peaks) & (t_offsets >= q_peaks)
-                
-                # Calculate intervals only for valid points
-                if np.any(valid_qrs):
-                    qrs_durations = (s_peaks[valid_qrs] - q_peaks[valid_qrs]) / desired_sampling_rate
-                    lead_features['Mean_QRS_Duration_ms'] = np.mean(qrs_durations) * 1000
-                    lead_features['Std_QRS_Duration_ms'] = np.std(qrs_durations) * 1000 if len(qrs_durations) > 1 else 0
-                
-                if np.any(valid_qt):
-                    qt_intervals = (t_offsets[valid_qt] - q_peaks[valid_qt]) / desired_sampling_rate
-                    lead_features['Mean_QT_Interval_ms'] = np.mean(qt_intervals) * 1000
-                    lead_features['Std_QT_Interval_ms'] = np.std(qt_intervals) * 1000 if len(qt_intervals) > 1 else 0
-                
-                # R-peak amplitudes
-                lead_features['Mean_R_Amplitude'] = np.mean(cleaned_signal[r_peaks])
-                lead_features['Std_R_Amplitude'] = np.std(cleaned_signal[r_peaks])
-                
-                # print(f"Lead {i+1}: Processed and features extracted successfully.")
-                
-            except Exception as e:
-                print(f"Lead {i+1}: Error during delineation: {e}")
-                # Keep NaN values for this lead
-            
-        except Exception as e:
-            print(f"Lead {i+1}: Error during processing: {e}")
-            
-        features_list.append(lead_features)
+    # Process each lead in parallel
+    features_list = process_leads_in_parallel(signals, n_leads, original_fs, 
+                                           desired_sampling_rate, expected_length, feature_names)
     
-    # Convert to numpy array (still with NaN values)
+    # Convert to numpy array
     features_array = np.array([list(d.values()) for d in features_list])
     
-    # Safety check for NaN/Inf values
-    nan_count = np.isnan(features_array).sum()
-    inf_count = np.isinf(features_array).sum()
-    if nan_count > 0 or inf_count > 0:
-        print(f"Found {nan_count} NaN values and {inf_count} Inf values in features. Imputing...")
-    
-    # TRAINING: Calculate and save median values for imputation
+    # Imputation for missing features
     if train:
         # Calculate median for each feature column, ignoring NaNs
         medians_by_lead = []
@@ -374,40 +1089,109 @@ def load_and_process_signal_train(record,
                     lead_medians[feature_name] = 0.0
             medians_by_lead.append(lead_medians)
         
-        # Impute missing values in training data
+        # Impute missing values using vectorized operations
         for lead_idx in range(features_array.shape[0]):
             for j, feature_name in enumerate(feature_names):
                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
                     features_array[lead_idx, j] = medians_by_lead[lead_idx][feature_name]
         
-        # Save medians for test data
         feature_medians = medians_by_lead
         
-    # TESTING: Apply saved median values
     elif feature_medians is not None:
-        # Impute missing values in test data using training medians
+        # Apply saved medians to test data
         for lead_idx in range(min(features_array.shape[0], len(feature_medians))):
             for j, feature_name in enumerate(feature_names):
                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
                     features_array[lead_idx, j] = feature_medians[lead_idx][feature_name]
     
-    # Final safety: Replace any remaining NaN/Inf with zeros
+    # Final safety using vectorized operation
     features_array = np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
     
     if train:
         label = load_label(record)
         label = np.array(label).astype(np.long)
         source = get_source(load_header(record))
-        return features_array, label, source, feature_medians
+        return record, features_array, label, source, feature_medians
     else:
-        return features_array
+        return record, features_array
 
-
-
-
-
+def load_and_process_signal_train(records, 
+                                  desired_sampling_rate=100,
+                                  train=True,
+                                  feature_medians=None,
+                                  batch_size=5):
+    """
+    Process multiple ECG records in parallel batches.
+    
+    Args:
+        records: List of record paths or a single record path
+        desired_sampling_rate: Target sampling rate (default: 100 Hz)
+        train: Whether this is training data
+        feature_medians: Dictionary of median values for imputation
+        batch_size: Number of records to process in parallel (default: 5)
+    
+    Returns:
+        If single record and train=True: features_array, label, source, feature_medians
+        If single record and train=False: features_array
+        If multiple records: list of processed record results
+    """
+    # If records is a single record path, convert to list
+    if isinstance(records, str):
+        single_record = True
+        records = [records]
+    else:
+        single_record = False
+    
+    results = []
+    
+    # Process records in batches
+    for i in range(0, len(records), batch_size):
+        batch_records = records[i:i+batch_size]
+        print(f"Processing batch {i//batch_size + 1}: records {i+1} to {min(i+batch_size, len(records))}")
+        
+        # Use ProcessPoolExecutor to process records in parallel
+        with ProcessPoolExecutor(max_workers=batch_size) as executor:
+            futures = []
+            for record in batch_records:
+                future = executor.submit(
+                    process_single_record,
+                    record=record,
+                    desired_sampling_rate=desired_sampling_rate,
+                    train=train,
+                    feature_medians=feature_medians
+                )
+                futures.append(future)
+            
+            # Collect results as they complete
+            for future in as_completed(futures):
+                try:
+                    record_result = future.result()
+                    results.append(record_result)
+                except Exception as e:
+                    print(f"Error processing record: {e}")
+    
+    # If processing a single record, return only its results
+    if single_record and results:
+        # For training mode
+        if train and len(results[0]) == 5:
+            _, features_array, label, source, feature_medians = results[0]
+            return features_array, label, source, feature_medians
+        # For testing mode
+        elif not train and len(results[0]) == 2:
+            _, features_array = results[0]
+            return features_array
+    
+    return results
 
 def train_model(data_folder, model_folder, verbose):
+    """
+    Train a model using the data in the data_folder and save it in the model_folder.
+    
+    Args:
+        data_folder: Folder containing the ECG records
+        model_folder: Folder to save the trained model
+        verbose: Whether to print progress
+    """
     # Find the data files.
     print("New submission: Training the model...")
     scaler = StandardScaler()
@@ -416,44 +1200,40 @@ def train_model(data_folder, model_folder, verbose):
 
     records = find_records(data_folder)
     num_records = len(records)
+    print(f"Found {num_records} records")
 
-    # Initialize storage for features and labels
+    # Get full paths for records
+    record_paths = [os.path.join(data_folder, record) for record in records]
+
+    # Process records in batches of 5 (optimal for EC2 g4dn.4xlarge with 16 vCPUs)
+    print("Processing records in parallel batches...")
+    results = load_and_process_signal_train(
+        record_paths,
+        desired_sampling_rate=100,
+        train=True,
+        feature_medians=None,
+        batch_size=5  # Process 5 records at a time
+    )
+    
+    # Extract features, labels, and other data
     X_train_features = []
     y_train = []
-    all_feature_medians = None  # To store feature medians for imputation
-
-    print("Starting preprocessing...")
-    for i in range(num_records):
-        record = os.path.join(data_folder, records[i])
-        print(f"record: {i+1} of {num_records}: {record}")
-
-        try:
-            # Unpack the returns - note we're only using features now
-            features_array, label, source, feature_medians = load_and_process_signal_train(
-                record, 
-                desired_sampling_rate=100,
-                train=True,
-                feature_medians=all_feature_medians
-            )
-            
-            print(f"features shape: {features_array.shape}, label: {label}")
-            
-            # Save the first record's feature medians or update
-            if all_feature_medians is None:
-                all_feature_medians = feature_medians
-            
-            # Append features - keep the original 12x6 shape
-            X_train_features.append(features_array)
-            y_train.append(label)
-            
-        except Exception as e:
-            print(f"Error processing record {record}: {e}")
-            continue
-
+    sources = []
+    all_feature_medians = None
+    
+    for record_path, features, label, source, feature_medians in results:
+        X_train_features.append(features)
+        y_train.append(label)
+        sources.append(source)
+        
+        # Save the first record's feature medians or update
+        if all_feature_medians is None:
+            all_feature_medians = feature_medians
+    
     # Convert lists to numpy arrays
     X_train_features = np.array(X_train_features)
     y_train = np.array(y_train)
-
+    
     print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
     print(f"y_train shape: {y_train.shape}")
 
@@ -478,9 +1258,9 @@ def train_model(data_folder, model_folder, verbose):
     # Input dimension is number of features per lead (6)
     feature_per_lead = X_train_features.shape[2]  # Should be 6
     
-    # Improved model for ECG features
+    # Create model
     model = ECGFeatureTransformer(
-        feature_dim=feature_per_lead,
+        feature_dim=feature_per_lead,  # Using all 6 features
         num_leads=12,
         n_heads=N_HEADS, 
         n_layers=N_LAYERS, 
@@ -542,11 +1322,64 @@ def train_model(data_folder, model_folder, verbose):
         print('Done.')
         print()
 
+def run_model(record, model, verbose):
+    """
+    Run a trained model on a record.
+    
+    Args:
+        record: Path to the record
+        model: Trained model
+        verbose: Whether to print progress
+    
+    Returns:
+        (binary_output, probability_output): Prediction and probability
+    """
+    if verbose:
+        print(f'Processing record {record} for prediction...')
+    
+    # Extract features from the record
+    features_array = load_and_process_signal_train(
+        record, 
+        desired_sampling_rate=100,
+        train=False,
+        feature_medians=model.feature_medians  # Use the saved medians for imputation
+    )
+    
+    # Apply scaling
+    original_shape = features_array.shape
+    features_flat = features_array.reshape(1, -1)  # Flatten for scaling
+    features_scaled = model.feature_scaler.transform(features_flat)
+    features_scaled = features_scaled.reshape(original_shape)  # Reshape back to (12, 6)
+    
+    # Convert to tensor and send to device
+    features_tensor = torch.tensor(features_scaled, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+    # features_tensor shape: (1, 12, 6) - batch_size, num_leads, num_features
+    
+    # Run prediction
+    with torch.no_grad():
+        logits = model(features_tensor)
+        probs = F.softmax(logits, dim=1).cpu().numpy()
+        pred_class = int(np.argmax(probs))
+    
+    binary_output = bool(pred_class)
+    probability_output = float(probs[0, 1])  # Probability for the positive class
+    
+    if verbose:
+        print(f'Prediction: {binary_output}, Probability: {probability_output:.4f}')
+    
+    return binary_output, probability_output
 
-
-# Load your trained models. This function is *required*. You should edit this function to add your code, but do *not* change the
-# arguments of this function. If you do not train one of the models, then you can return None for the model.
 def load_model(model_folder, verbose):
+    """
+    Load a trained model from a folder.
+    
+    Args:
+        model_folder: Folder containing the saved model
+        verbose: Whether to print progress
+    
+    Returns:
+        model: Loaded model
+    """
     if verbose:
         print('Loading model and features preprocessing components...')
     
@@ -585,100 +1418,6 @@ def load_model(model_folder, verbose):
         print('Model loaded successfully.')
     return model
 
-# Run your trained model. This function is *required*. You should edit this function to add your code, but do *not* change the
-# arguments of this function.
-def run_model(record, model, verbose):
-    if verbose:
-        print(f'Processing record {record} for prediction...')
-    
-    # Extract features from the record
-    features_array = load_and_process_signal_train(
-        record, 
-        desired_sampling_rate=100,
-        train=False,
-        feature_medians=model.feature_medians  # Use the saved medians for imputation
-    )
-    
-    # Apply scaling
-    original_shape = features_array.shape
-    features_flat = features_array.reshape(1, -1)  # Flatten for scaling
-    features_scaled = model.feature_scaler.transform(features_flat)
-    features_scaled = features_scaled.reshape(original_shape)  # Reshape back to (12, 6)
-    
-    # Convert to tensor and send to device
-    features_tensor = torch.tensor(features_scaled, dtype=torch.float32).unsqueeze(0).to(DEVICE)
-    # features_tensor shape: (1, 12, 6) - batch_size, num_leads, num_features
-    
-    # Run prediction
-    with torch.no_grad():
-        logits = model(features_tensor)
-        probs = F.softmax(logits, dim=1).cpu().numpy()
-        pred_class = int(np.argmax(probs))
-    
-    binary_output = bool(pred_class)
-    probability_output = float(probs[0, 1])  # Probability for the positive class
-    
-    if verbose:
-        print(f'Prediction: {binary_output}, Probability: {probability_output:.4f}')
-    
-    return binary_output, probability_output
-################################################################################
-#
-# Optional functions. You can change or remove these functions and/or add new functions.
-#
-################################################################################
-
-# Extract your features.
-def extract_features(record):
-    header = load_header(record)
-
-    # Extract the age from the record.
-    age = get_age(header)
-    age = np.array([age])
-
-    # Extract the sex from the record and represent it as a one-hot encoded vector.
-    sex = get_sex(header)
-    sex_one_hot_encoding = np.zeros(3, dtype=bool)
-    if sex.casefold().startswith('f'):
-        sex_one_hot_encoding[0] = 1
-    elif sex.casefold().startswith('m'):
-        sex_one_hot_encoding[1] = 1
-    else:
-        sex_one_hot_encoding[2] = 1
-
-    # Extract the source from the record (but do not use it as a feature).
-    source = get_source(header)
-
-    # Load the signal data and fields. Try fields.keys() to see the fields, e.g., fields['fs'] is the sampling frequency.
-    signal, fields = load_signals(record)
-    channels = fields['sig_name']
-
-    # Reorder the channels in case they are in a different order in the signal data.
-    reference_channels = ['I', 'II', 'III', 'AVR', 'AVL', 'AVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
-    num_channels = len(reference_channels)
-    signal = reorder_signal(signal, channels, reference_channels)
-
-    # Compute two per-channel features as examples.
-    signal_mean = np.zeros(num_channels)
-    signal_std = np.zeros(num_channels)
-
-    for i in range(num_channels):
-        num_finite_samples = np.sum(np.isfinite(signal[:, i]))
-        if num_finite_samples > 0:
-            signal_mean[i] = np.nanmean(signal)
-        else:
-            signal_mean = 0.0
-        if num_finite_samples > 1:
-            signal_std[i] = np.nanstd(signal)
-        else:
-            signal_std = 0.0
-
-    # Return the features.
-
-    return age, sex_one_hot_encoding, source, signal_mean, signal_std
-
-# Save your trained model.
-# Save your trained model.
 def save_model(model_folder, model, scaler, feature_medians):
     """
     Save model and related components to the model folder.
