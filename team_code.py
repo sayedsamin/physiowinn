@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 # Edit this script to add your team's code. Some functions are *required*, but you can edit most parts of the required functions,
 # change or remove non-required functions, and add your own functions.
 
@@ -51,6 +50,8 @@ def seed_everything(seed=42):
     torch.backends.cudnn.enabled = False
     random.seed(seed)
 
+
+seed_everything(42)
 
 class FocalLoss(nn.Module):
     def __init__(self, gamma=2, alpha=None, reduction='mean', task_type='binary', num_classes=None):
@@ -112,11 +113,10 @@ class FocalLoss(nn.Module):
             return loss.sum()
         return loss
 
-seed_everything(42)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 EPOCHS = 150
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0001 # it was 0.001 for transformer
 SPATIAL_INPUT_DIM = 10
 TEMPORAL_INPUT_DIM = 120
 N_HEADS = 1
@@ -134,71 +134,112 @@ def filter_data(signal, lowcut=0.5, highcut=40.0, fs=250.0, order=5):
     return y
 
 
-class ECGFeatureTransformer(nn.Module):
-    def __init__(self, feature_dim=6, num_leads=12, n_heads=8, n_layers=2, dropout=0.1, num_classes=2):
-        super(ECGFeatureTransformer, self).__init__()
+# class ECGFeatureTransformer(nn.Module):
+#     def __init__(self, feature_dim=6, num_leads=12, n_heads=8, n_layers=2, dropout=0.1, num_classes=2):
+#         super(ECGFeatureTransformer, self).__init__()
         
-        self.feature_dim = feature_dim
-        self.num_leads = num_leads
+#         self.feature_dim = feature_dim
+#         self.num_leads = num_leads
         
-        # Feature embedding - increase dimensionality for transformer
-        self.feature_embedding = nn.Linear(feature_dim, 64)
+#         # Feature embedding - increase dimensionality for transformer
+#         self.feature_embedding = nn.Linear(feature_dim, 64)
         
-        # Positional encoding for leads
-        self.pos_encoding = nn.Parameter(torch.zeros(1, num_leads, 64))
-        nn.init.normal_(self.pos_encoding, mean=0, std=0.02)
+#         # Positional encoding for leads
+#         self.pos_encoding = nn.Parameter(torch.zeros(1, num_leads, 64))
+#         nn.init.normal_(self.pos_encoding, mean=0, std=0.02)
         
-        # Transformer operates on leads as sequence length
-        self.transformer_encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=64,  # Embedding dimension
-                nhead=n_heads,
-                dim_feedforward=256,
-                dropout=dropout,
-                batch_first=True
-            ),
-            num_layers=n_layers
-        )
+#         # Transformer operates on leads as sequence length
+#         self.transformer_encoder = nn.TransformerEncoder(
+#             nn.TransformerEncoderLayer(
+#                 d_model=64,  # Embedding dimension
+#                 nhead=n_heads,
+#                 dim_feedforward=256,
+#                 dropout=dropout,
+#                 batch_first=True
+#             ),
+#             num_layers=n_layers
+#         )
         
-        # Global attention pooling
-        self.attention = nn.Sequential(
-            nn.Linear(64, 32),
-            nn.Tanh(),
-            nn.Linear(32, 1)
-        )
+#         # Global attention pooling
+#         self.attention = nn.Sequential(
+#             nn.Linear(64, 32),
+#             nn.Tanh(),
+#             nn.Linear(32, 1)
+#         )
         
-        # Final classification layers
-        self.classifier = nn.Sequential(
-            nn.Linear(64, 32),
-            nn.LayerNorm(32),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(32, num_classes)
-        )
+#         # Final classification layers
+#         self.classifier = nn.Sequential(
+#             nn.Linear(64, 32),
+#             nn.LayerNorm(32),
+#             nn.ReLU(),
+#             nn.Dropout(dropout),
+#             nn.Linear(32, num_classes)
+#         )
     
-    def forward(self, x):
-        # x shape: (batch_size, num_leads, feature_dim)
-        batch_size = x.size(0)
+#     def forward(self, x):
+#         # x shape: (batch_size, num_leads, feature_dim)
+#         batch_size = x.size(0)
         
-        # Project each lead's features to higher dimension
-        x = self.feature_embedding(x)  # (batch_size, num_leads, 64)
+#         # Project each lead's features to higher dimension
+#         x = self.feature_embedding(x)  # (batch_size, num_leads, 64)
         
-        # Add positional encoding for leads
-        x = x + self.pos_encoding
+#         # Add positional encoding for leads
+#         x = x + self.pos_encoding
         
-        # Pass through transformer
-        x = self.transformer_encoder(x)  # (batch_size, num_leads, 64)
+#         # Pass through transformer
+#         x = self.transformer_encoder(x)  # (batch_size, num_leads, 64)
         
-        # Attention-based pooling over leads
-        attn_weights = self.attention(x)  # (batch_size, num_leads, 1)
-        attn_weights = F.softmax(attn_weights, dim=1)
-        x = torch.sum(x * attn_weights, dim=1)  # (batch_size, 64)
+#         # Attention-based pooling over leads
+#         attn_weights = self.attention(x)  # (batch_size, num_leads, 1)
+#         attn_weights = F.softmax(attn_weights, dim=1)
+#         x = torch.sum(x * attn_weights, dim=1)  # (batch_size, 64)
         
-        # Classification
-        output = self.classifier(x)
+#         # Classification
+#         output = self.classifier(x)
         
-        return output
+#         return output
 
+
+class conv_model(nn.Module):
+    def __init__(self, input_dim=6, num_leads=12, num_classes=2):
+        super(conv_model, self).__init__()
+        self.input_dim = input_dim
+        self.num_leads = num_leads
+        self.num_classes = num_classes
+        
+        self.conv1_layer = nn.Conv2d(1, 32, kernel_size=(3, 1), stride=1)
+        self.conv2_layer = nn.Conv2d(32, 64, kernel_size=(3, 1), stride=1)
+        
+        #make conv1 as a sequential layer
+        self.conv1 = nn.Sequential(
+            self.conv1_layer,
+            nn.ReLU(),
+     
+        )
+        self.conv2 = nn.Sequential(
+            self.conv2_layer,
+            nn.ReLU(),
+            nn.AvgPool2d(kernel_size=(2, 1))  # Downsample
+        )
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(1536, 128)  # Adjust input size based on conv output
+        self.fc2 = nn.Linear(128, num_classes)
+        self.dropout = nn.Dropout(0.5)
+        self.flatten = nn.Flatten()
+
+        
+    def forward(self, x):
+        x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.flatten(x)  # Flatten the output for fully connected layers
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        
+        return x
 
 
 
@@ -1225,8 +1266,8 @@ def train_model(data_folder, model_folder, verbose):
         X_train_features.append(features)
         y_train.append(label)
         sources.append(source)
-        
-        # Save the first record's feature medians or update
+      
+         # Save the first record's feature medians or update
         if all_feature_medians is None:
             all_feature_medians = feature_medians
     
@@ -1236,6 +1277,18 @@ def train_model(data_folder, model_folder, verbose):
     
     print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
     print(f"y_train shape: {y_train.shape}")
+
+    ################################################################################################
+    # save the features
+    # np.savez("fold_2_training_features.npz", X_train_features=X_train_features, y_train=y_train, 
+    #          all_feature_medians=all_feature_medians, sources = sources) 
+    
+    # data = np.load("fold_2_training_features.npz", allow_pickle=True)
+    # X_train_features = data['X_train_features']
+    # y_train = data['y_train']
+    # all_feature_medians = data['all_feature_medians']  # Convert to dictionary
+    # sources = data['sources'].tolist()  # Convert to list
+    ####################################################################################################
 
     # Scale features - be careful to preserve the shape
     print("Starting scaling...")
@@ -1259,14 +1312,7 @@ def train_model(data_folder, model_folder, verbose):
     feature_per_lead = X_train_features.shape[2]  # Should be 6
     
     # Create model
-    model = ECGFeatureTransformer(
-        feature_dim=feature_per_lead,  # Using all 6 features
-        num_leads=12,
-        n_heads=N_HEADS, 
-        n_layers=N_LAYERS, 
-        dropout=DROPOUT, 
-        num_classes=NUM_CLASSES
-    ).to(DEVICE)
+    model = conv_model(input_dim=feature_per_lead, num_leads=X_train_features.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
                                        
     # Class weights calculation
     num_0s = np.sum(y_train == 0)
@@ -1282,7 +1328,7 @@ def train_model(data_folder, model_folder, verbose):
 
     if verbose:
         print('Starting training...')
-
+    # print("using entropy loss")
     model.train()
 
     for epoch in range(EPOCHS):
@@ -1298,6 +1344,18 @@ def train_model(data_folder, model_folder, verbose):
             optimizer.zero_grad()
             outputs = model(batch_features)
             loss = criterion(outputs, batch_labels)
+            # #######
+            # p = nn.Softmax(dim=1)(outputs)
+            # entropy_per_ex = torch.sum(-p * torch.log(p + 1e-12), dim=1)
+            # mask_pos = (batch_labels == 1)
+            # if mask_pos.any():
+            #     # Average entropy over only positive samples
+            #     entropy_pos = entropy_per_ex[mask_pos].mean()
+            # else:
+            #     # No positive examples in this batch → no confidence penalty
+            #     entropy_pos = torch.tensor(0., device=outputs.device)
+            # #######
+            # loss = loss + 0.1 * entropy_pos
             loss.backward()
             optimizer.step()
             
@@ -1312,7 +1370,18 @@ def train_model(data_folder, model_folder, verbose):
         accuracy = correct / len(all_labels)
         f1 = f1_score(all_labels, all_predictions, average='macro')
         
+
+        # save the model every 5 epochs and check for loss = nan, if loss is nan then dont save the model and use the previous model
         print(f'Loss: {epoch_loss:.4f}, Accuracy: {accuracy:.4f}, F1 Score: {f1:.4f}')
+        # if np.isnan(epoch_loss):
+        #     print(f"Epoch {epoch+1}: Loss is NaN, skipping model save.")
+        #     continue
+        if accuracy > 0.95:
+            print(f"Epoch {epoch+1}: Accuracy is above 0.95, saving model.")
+            # Save the model
+            break        
+
+        
         
     # Save model, scaler, and feature medians
     os.makedirs(model_folder, exist_ok=True)    
@@ -1398,14 +1467,7 @@ def load_model(model_folder, verbose):
         feature_medians = pickle.load(f)
     
     # Create and load model
-    model = ECGFeatureTransformer(
-        feature_dim=6,  # 6 features per lead
-        num_leads=12,
-        n_heads=N_HEADS, 
-        n_layers=N_LAYERS, 
-        dropout=DROPOUT, 
-        num_classes=NUM_CLASSES
-    ).to(DEVICE)
+    model = conv_model(input_dim=6, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
     
     model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     model.eval()
