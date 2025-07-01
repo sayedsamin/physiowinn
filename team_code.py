@@ -848,47 +848,47 @@ def train_model(data_folder, model_folder, verbose):
     record_paths = [os.path.join(data_folder, record) for record in records]
 
     # Process records in batches of 5 (optimal for EC2 g4dn.4xlarge with 16 vCPUs)
-    # print("Processing records in parallel batches...")
-    # results = load_and_process_signal_train(
-    #     record_paths,
-    #     desired_sampling_rate=100,
-    #     train=True,
-    #     feature_medians=None,
-    #     batch_size=5  # Process 5 records at a time
-    # )
+    print("Processing records in parallel batches...")
+    results = load_and_process_signal_train(
+        record_paths,
+        desired_sampling_rate=100,
+        train=True,
+        feature_medians=None,
+        batch_size=5  # Process 5 records at a time
+    )
     
-    # # Extract features, labels, and other data
-    # X_train_features = []
-    # y_train = []
-    # sources = []
-    # all_feature_medians = None
+    # Extract features, labels, and other data
+    X_train_features = []
+    y_train = []
+    sources = []
+    all_feature_medians = None
     
-    # for record_path, features, label, source, feature_medians in results:
-    #     X_train_features.append(features)
-    #     y_train.append(label)
-    #     sources.append(source)
+    for record_path, features, label, source, feature_medians in results:
+        X_train_features.append(features)
+        y_train.append(label)
+        sources.append(source)
       
-    #     # Save the first record's feature medians or update
-    #     if all_feature_medians is None:
-    #         all_feature_medians = feature_medians
+        # Save the first record's feature medians or update
+        if all_feature_medians is None:
+            all_feature_medians = feature_medians
     
-    # # Convert lists to numpy arrays
-    # X_train_features = np.array(X_train_features)
-    # y_train = np.array(y_train)
+    # Convert lists to numpy arrays
+    X_train_features = np.array(X_train_features)
+    y_train = np.array(y_train)
     
-    # print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
-    # print(f"y_train shape: {y_train.shape}")
+    print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
+    print(f"y_train shape: {y_train.shape}")
 
     # # ################################################################################################
     # # # Optionally save/load features to avoid reprocessing
     # np.savez("fold_2_training_features_new_p.npz", X_train_features=X_train_features, y_train=y_train, 
     #          all_feature_medians=all_feature_medians, sources=sources) 
     
-    data = np.load("fold_2_training_features_new_p.npz", allow_pickle=True)
-    X_train_features = data['X_train_features']
-    y_train = data['y_train']
-    all_feature_medians = data['all_feature_medians']
-    sources = data['sources'].tolist()
+    # data = np.load("fold_2_training_features_new_p.npz", allow_pickle=True)
+    # X_train_features = data['X_train_features']
+    # y_train = data['y_train']
+    # all_feature_medians = data['all_feature_medians']
+    # sources = data['sources'].tolist()
     ################################################################################################
     # from imblearn.over_sampling import SMOTE
 
@@ -935,17 +935,6 @@ def train_model(data_folder, model_folder, verbose):
     print(f"Training set: {len(y_train_split)} samples ({np.sum(y_train_split == 0)} class 0, {np.sum(y_train_split == 1)} class 1)")
     print(f"Validation set: {len(y_val)} samples ({np.sum(y_val == 0)} class 0, {np.sum(y_val == 1)} class 1)")
 
-    # original_train_shape = X_train.shape
-    # X_train_flat = X_train.reshape(X_train.shape[0], -1)  # Flatten to (n_samples, n_features)
-    
-    # print("Applying SMOTE to balance training data...")
-    # X_train, y_train_split = smote.fit_resample(X_train_flat, y_train_split)
-    
-    # # Reshape back to original dimensions
-    # X_train = X_train.reshape(-1, original_train_shape[1], original_train_shape[2])
-    
-    # print(f"After SMOTE - Training set: {len(y_train_split)} samples ({np.sum(y_train_split == 0)} class 0, {np.sum(y_train_split == 1)} class 1)")
-    
     print(f"X_train shape: {X_train.shape}")  # Should be (num_samples, 12, 6)
     
     # Scale features - be careful to preserve the shape
