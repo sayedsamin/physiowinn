@@ -149,8 +149,8 @@ def ranking_hinge_loss(scores, target, margin=1.0, num_pairs=1000):
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-EPOCHS = 300
-LEARNING_RATE =   5e-4 # 0.0001 *8 # # it was 0.001 for transformer
+
+LEARNING_RATE =   5e-4# 0.0001 *8 # # it was 0.001 for transformer
 SPATIAL_INPUT_DIM = 10
 TEMPORAL_INPUT_DIM = 120
 N_HEADS = 1
@@ -167,8 +167,9 @@ def filter_data(signal, lowcut=0.5, highcut=40.0, fs=250.0, order=5):
     y = lfilter(b, a, signal)
     return y
 
+
 class gnn_model(nn.Module):
-    def __init__(self, input_dim=28, num_leads=12, num_classes=2):
+    def __init__(self, input_dim=30, num_leads=12, num_classes=2):
         super(gnn_model, self).__init__()
 
         # temp = input_dim
@@ -181,11 +182,11 @@ class gnn_model(nn.Module):
 
         self.adj_linear = nn.Parameter(torch.rand(num_leads, input_dim), requires_grad=True)
         
-        self.activation = nn.LeakyReLU() #  nn.GELU() #  nn.GELU() # nn.LeakyReLU() # 
+        self.activation = nn.SELU() # nn.LeakyReLU() #  nn.GELU() #  nn.GELU() # nn.LeakyReLU() # 
         #make conv1 as a sequential layer
-        expand = input_dim*2
+        expand = input_dim*10
         self.gnn1 = nn.Sequential( nn.Linear(input_dim, expand  ),
-                                #   nn.BatchNorm1d(12),
+                                
             self.activation,
               nn.LayerNorm(  expand ),
               nn.Dropout(0.2)
@@ -216,11 +217,12 @@ class gnn_model(nn.Module):
         # )
 
         units = num_leads*expand#
+        unit_out = 128 # 64
         # Fully connected layers
         self.layer_norm = nn.LayerNorm(  units )  # Adjust input size based on conv output
-        self.fc1 = nn.Linear(units, 64 )  # Adjust input size based on conv output
-        self.fc2 = nn.Linear(64, num_classes)
-        self.dropout = nn.Dropout(0.2)
+        self.fc1 = nn.Linear(units, unit_out )  # Adjust input size based on conv output
+        self.fc2 = nn.Linear(unit_out, num_classes)
+        self.dropout = nn.Dropout(0.7)
         self.flatten = nn.Flatten()
 
         
@@ -263,15 +265,13 @@ class gnn_model(nn.Module):
 
         # print(torch.min(corr) ) 
         # corr     = corr - corr.min()
-        corr     = torch.relu(corr) #+ torch.eye(12).to(DEVICE) # Normalize to [0, 1]
+        corr     = torch.relu(corr ) #+ torch.eye(12).to(DEVICE) # Normalize to [0, 1]
         # print(corr)
+
 
         corr = corr/( torch.sum(corr, dim=-1, keepdim=True) +1e-6 ) # Normalize across features
 
-        corr = corr #+ torch.eye(self.num_leads).to(DEVICE) # Normalize to [0, 1]
-
-        
-
+      
 
         # # 6. graph‐Laplace normalization
         deg = torch.sum(corr, axis=-1)                              # → [batch, C]
@@ -282,7 +282,7 @@ class gnn_model(nn.Module):
         norm_adj = torch.matmul(norm_deg, torch.matmul(corr, norm_deg) )
 
 
-        A_k = torch.linalg.matrix_power(norm_adj, 1)
+        A_k = torch.linalg.matrix_power(norm_adj, 1 )
 
         # print( A_k )
 
@@ -317,6 +317,7 @@ class gnn_model(nn.Module):
         # ## x = self.conv2(x)
        
         x = self.flatten(x)  # Flatten the output for fully connected layers
+        
         x = self.layer_norm(x)
         x = self.fc1(x)
         x = self.activation(x)
@@ -336,30 +337,30 @@ class conv_model(nn.Module):
 
         
 
-        self.activation = nn.GELU() # nn.LeakyReLU() #  
+        self.activation = nn.LeakyReLU() #   nn.GELU() # 
 
     
+        neurons = 64
+        self.conv1_layer = nn.Conv2d(1, neurons, kernel_size=(12, 1), stride=1)
+        # self.conv2_layer = nn.Conv2d(32, 64, kernel_size=(3, 1), stride=1)
         
-        self.conv1_layer = nn.Conv2d(1, 32, kernel_size=(3, 1), stride=1)
-        self.conv2_layer = nn.Conv2d(32, 64, kernel_size=(3, 1), stride=1)
-        
-        dr = .5
+        dr = .2
         #make conv1 as a sequential layer
         self.conv1 = nn.Sequential(
             self.conv1_layer,
-            nn.BatchNorm2d(32),
+            nn.BatchNorm2d(neurons),
             self.activation,
             nn.Dropout(dr),
      
         )
 
-        self.conv2 = nn.Sequential(
-            self.conv2_layer,
-            nn.BatchNorm2d(64),
-            self.activation,
-            # nn.AvgPool2d(kernel_size=(2, 1)),  # Downsample
-            nn.Dropout(dr)
-        )
+        # self.conv2 = nn.Sequential(
+        #     self.conv2_layer,
+        #     nn.BatchNorm2d(64),
+        #     self.activation,
+        #     # nn.AvgPool2d(kernel_size=(2, 1)),  # Downsample
+        #     nn.Dropout(dr)
+        # )
 
     
         
@@ -394,10 +395,17 @@ class conv_model(nn.Module):
         #     nn.Dropout(0.2)
         # )
 
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=64, nhead=1, batch_first=True)
+        self.encoder = nn.Parameter( torch.randn(12,30), requires_grad=True)
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=30, nhead=5,
+                                                        dim_feedforward = 60, 
+                                                        batch_first=True ,
+                                                        activation = self.activation,
+                                                         norm_first = True )
+    
+        self.ll = nn.Linear(30, 30 )
 
         # Fully connected layers
-        units = 64 * 8 *   input_dim
+        units = 12*30 #64 * 8 *   input_dim
         self.layer_norm = nn.LayerNorm(  units )  # Adjust input size based on conv output
         self.fc1 = nn.Linear(units, 64 )  # Adjust input size based on conv output
         self.fc2 = nn.Linear(64, num_classes)
@@ -414,20 +422,23 @@ class conv_model(nn.Module):
         # x = x.permute(0,  2, 1 )  # Change shape to (batch_size,   input_dim, num_leads)
         # x = x.unsqueeze(-1)
 
-        x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
+        #x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
 
        
         # print(x.shape)  
-        x = self.conv1(x)
+        #x = self.conv1(x).squeeze()
         # print(x.shape)  # Debugging line to check shape after conv1
-        x = self.conv2(x)
+        # x = self.conv2(x)
         # print(x.shape)  # Debugging line to check shape after conv1
         
         
         # x = x.mean(dim=1 ) # B, 8, F # .permute(0,  2, 1 )  # Remove the last dimension: (batch_size, num_leads, features)
 
         # print( 'oou',  x.shape ) 
-        # x = self.encoder_layer(x) # B, 12, 64
+        x = self.encoder + x
+        x = self.encoder_layer(x) # B, 12, 64
+
+        # x = self.activation( self.ll(x) ) #
 
         # print( 'oou3333333333333333',  x.shape ) 
 
@@ -447,69 +458,6 @@ class conv_model(nn.Module):
 # torch.autograd.set_detect_anomaly(True)
 
 
-    
-
-from torch.autograd import Function
-
-class GradientReversalFunction(Function):
-    @staticmethod
-    def forward(ctx, x, alpha):
-        ctx.alpha = alpha
-        return x.view_as(x)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # flip the sign and scale by alpha
-        return grad_output.neg() * ctx.alpha, None
-    
-
-class DomainAdaptationModel(nn.Module):
-    def __init__(self, input_dim, num_leads, num_classes ):
-        super(DomainAdaptationModel, self).__init__()
-
-        # Feature extractor
-        # self.feature_extractor = conv_model( input_dim=input_dim, num_leads=num_leads, num_classes = num_classes)
-        # self.feature_extractor = gnn_model( input_dim=input_dim, num_leads=num_leads, num_classes = num_classes)
-
-        
-
-        units =  768 # 3072 # 12*input_dim*8
-
-        # Domain classifier for domain adaptation
-        self.domain_labels = nn.Sequential( nn.Linear(units, 128 ),  # Adjust input size based on conv output
-                                                nn.ReLU() ,
-                                                nn.Dropout(0.7),
-                                                nn.Linear(128, num_classes)                             
-        )
-
-        # Domain classifier for domain adaptation
-        self.domain_classifier = nn.Sequential( nn.Linear(units, 128 ),  # Adjust input size based on conv output
-                                                nn.ReLU() ,
-                                                nn.Dropout(0.7),
-                                                nn.Linear(128, 2)                             
-        )
-
-    def forward(self, x_source, alpha):
-
-        # print( x_source.shape, x_target.shape) 
-        # extract
-        src_feat = self.feature_extractor(x_source)
-
-        # print( 'size', src_feat.shape )
-    
-
-        logits = self.domain_labels( src_feat )
-        
-    
-        # gradient reversal
-        src_rev = GradientReversalFunction.apply(src_feat, alpha)
-    
-        
-        # domain preds
-        dom_s = self.domain_classifier(src_rev)
-
-
-        return logits, dom_s
     
 
 #         return x
@@ -588,7 +536,7 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
         feature_names.extend(['HRV_SD1', 'HRV_SD2', 'HRV_SD1SD2', 'RR_SDNN_ms', 'pNN50'])
 
     if feature_config.get('hrv_welch', True):
-        feature_names.extend(['HRV_LF', 'HRV_HF', 'HRV_LF_norm'])
+        feature_names.extend(['HRV_LF', 'HRV_HF', 'HRV_LF_norm', 'HRV_LF_HF'])
 
   
     # P wave features
@@ -691,6 +639,7 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
             lead_features['HRV_LF'] = lf_power
             lead_features['HRV_HF'] = hf_power
             lead_features['HRV_LF_norm'] = lf_power /( 1e-6 + lf_power + hf_power )
+            lead_features['HRV_LF_HF'] = lf_power /( 1e-6 + hf_power )
             # print('done spectral')
 
         
@@ -1195,6 +1144,7 @@ def load_and_process_signal_train(records,
     return results
 
 
+
 class CMLoss(nn.Module):
     """
     Clinical Metric (CM) Loss from Vicar et al. CinC2020-189.
@@ -1228,19 +1178,36 @@ class CMLoss(nn.Module):
             loss: Scalar tensor = - sum_{i,j} A_{ij} * W_{ij}
         """
         # 1) Convert logits to probabilities
-        p = torch.sigmoid( logits )         # shape (b, c)
-        L = labels.float()                # shape (b, c)
+        p = torch.softmax( logits , dim=1)         # shape (b, c)
+        
+        L = labels.float()                # shape (b, c)    
 
-        # 2) Continuous OR: B = L OR p = L + p - L*p
-        B = L + p - L * p                 # shape (b, c)
+        # # print( torch.sum(p,1) )
+        # # print( p.shape, L.shape)
 
-        # 3) Normalizer N: sum across classes then expand
-        N = B.sum(dim=1, keepdim=True)    # shape (b, 1)
-        N = N.clamp(min=self.eps).expand_as(B)  # shape (b, c)
+        # # 2) Continuous OR: B = L OR p = L + p - L*p
+        # B = L + p - L * p                 # shape (b, c)
 
-        # 4) Soft confusion matrix A = L^T @ (p / N)
-        R_over_N = p / N                  # shape (b, c)
-        A = L.t() @ R_over_N              # shape (c, c)
+        # # print( B.shape)
+        # # print(B)
+
+        # # 3) Normalizer N: sum across classes then expand
+        # N = B.sum(dim=1, keepdim=True)    # shape (b, 1)
+        # N = N.clamp(min=self.eps).expand_as(B)  # shape (b, c)
+
+        # # 4) Soft confusion matrix A = L^T @ (p / N)
+        # R_over_N = p / N                  # shape (b, c)
+        # A = L.t() @ R_over_N              # shape (c, c)
+
+        N = L.sum(dim=0, keepdim=True) 
+        # print(N)
+        N = N.clamp(min=self.eps).expand_as(L)
+        # print(N.shape)
+        # print(N)
+        L_r = L / N 
+        A = L_r.t() @ p 
+
+        # print(A)
 
         # 5) Weighted sum with W
         cm_value = (A * self.W).sum()     # scalar
@@ -1248,11 +1215,14 @@ class CMLoss(nn.Module):
         # 6) Return negative for minimization
         return -cm_value
 
-# def optimizer_scheduler(optimizer, initial_lr, p):
-#         for param_group in optimizer.param_groups:
-#             # initial learning rate 5e-4
-#             param_group['lr'] = initial_lr / (1. + 10 * p) ** 0.75
-#         return optimizer   
+def optimizer_scheduler(optimizer, initial_lr, ep):
+    if ep % 30 == 0:
+        # Reduce LR
+        expo = int(ep / 30 )
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = initial_lr * (0.1)**(expo)
+    
+    return optimizer
 
 
 
@@ -1301,8 +1271,57 @@ def train_model(data_folder, model_folder, verbose):
    
 }
     
+
+    training_records = []
+    print(f"Original number of records: {len(record_paths)}")
+
+    # for i, path in enumerate(record_paths):
+    #     source = load_source(path)
+    #     label = load_label(path)
+    #     print(source)
+    #     # Skip negative samples from CODE-15
+    #     if source == 'CODE-15%' and label == 0:
+    #         pass
+    #     else:
+    #         training_records.append(path)
+
+    # print(f"After filtering: {len(training_records)} records")
+
+    # Filter records: keep all positive samples, only 1% of CODE-15 negative samples
+    # training_records = []
+    # code15_neg_records = []  # Store CODE-15 negative samples for sampling
+    # print(f"Original number of records: {len(record_paths)}")
+
+    # for i, path in enumerate(record_paths):
+        
+    #     source = load_source(path)
+    #     label = load_label(path)
+
+        
+        
+    #     if source == 'CODE-15%' and label == 0:
+    #         code15_neg_records.append(path)
+    #     else:
+    #         training_records.append(path)
+
+    # #camilo commneted this as there are not code 15 / jul 18
+    # print('negative',len(code15_neg_records))
+    # sample_size = max(1, int(0.01 * len(code15_neg_records)))  
+    
+
+    # # random.seed(42)  
+    # sampled_code15_neg = random.sample(code15_neg_records, sample_size)
+
+    # training_records.extend(code15_neg_records)
+
+    # print(f"CODE-15 negative samples: {len(code15_neg_records)} total, {sample_size} sampled (1%)")
+    # print(f"After filtering: {len(training_records)} records")
+    # print(f"Sampling ratio for CODE-15 negatives: {sample_size}/{len(code15_neg_records)} = {100*sample_size/max(1,len(code15_neg_records)):.2f}%")
+
+
+
     results = load_and_process_signal_train(
-        record_paths,
+        record_paths, #record_paths,
         desired_sampling_rate=100,
         train=True,
         batch_size=5,  # Process 5 records at a time,
@@ -1313,7 +1332,6 @@ def train_model(data_folder, model_folder, verbose):
     X_train_features = []
     y_train = []
     sources = []
-    all_feature_medians = None
 
     for record_path, features, label, source in results:
         X_train_features.append(features)
@@ -1329,14 +1347,14 @@ def train_model(data_folder, model_folder, verbose):
 
 
     
-    print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
-    print(f"y_train shape: {y_train.shape}")
+    # print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
+    # print(f"y_train shape: {y_train.shape}")
 
-# #     # # # ################################################################################################
-# #     # # # # Optionally save/load features to avoid reprocessing
-#     np.savez("fold_2_training_features_new_p_median_29.npz", X_train_features=X_train_features, y_train=y_train, sources=sources) 
+    # # # # # ################################################################################################
+    # # # # # # Optionally save/load features to avoid reprocessing
+    # np.savez("fold_2_training_features_new_val.npz", X_train_features=X_train_features, y_train=y_train, sources=sources) 
     
-    # data = np.load("fold_2_training_features_new_p_median_29.npz", allow_pickle=True)
+    # data = np.load("fold_2_training_features_new_val.npz", allow_pickle=True)
 
     # feature_names = [ 
     #     'Mean_QRS_Duration_ms' ,
@@ -1353,6 +1371,7 @@ def train_model(data_folder, model_folder, verbose):
     #     'HRV_LF' ,
     #     'HRV_HF' ,
     #     'HRV_LF_norm',
+    #     'HRV_LF_HF',
     #     'Mean_P_Amplitude' ,
     #     'Std_P_Amplitude' ,
     #     'Mean_P_Duration_ms' ,
@@ -1370,7 +1389,7 @@ def train_model(data_folder, model_folder, verbose):
     #     'pNN50']
 
 
-    # define here which features to use
+    # # define here which features to use
     # desired_feat = [
     # 'Mean_P_Duration_ms',
     # 'HRV_SD2',
@@ -1399,7 +1418,7 @@ def train_model(data_folder, model_folder, verbose):
     # 'Mean_QRS_Duration_ms',
     # 'Std_QRS_Duration_ms',
     # 'HRV_SD1SD2',
-    # 'QTc_Fridericia_ms'     ]
+    # 'QTc_Fridericia_ms'  , 'HRV_LF_HF'   ]
 
     # desired_feat = desired_feat[:26]
 
@@ -1408,8 +1427,10 @@ def train_model(data_folder, model_folder, verbose):
     # print('ffff',X_train_features.shape)
     
     # y_train = data['y_train']
-    # all_feature_medians = data['all_feature_medians']
-    # sources = data['sources'].tolist()
+    
+    # sources = data['sources']
+   
+    
     ################################################################################################
     # from imblearn.over_sampling import SMOTE
 
@@ -1420,54 +1441,75 @@ def train_model(data_folder, model_folder, verbose):
     # )
 
 
-    # Split data into train and validation sets with specific class distribution
-    # First, separate data by class
-    class_0_indices = np.where(y_train == 0)[0]
-    class_1_indices = np.where(y_train == 1)[0]
+    # # Split data into train and validation sets with specific class distribution
+    # # First, separate data by class
+    # class_0_indices = np.where(y_train == 0)[0]
+    # class_1_indices = np.where(y_train == 1)[0]
     
-    # Determine validation set size (20% of total data)
-    val_size = int(0.2 * len(y_train))
+    # # Determine validation set size (20% of total data)
+    # val_size = int(.2 * len(y_train))
     
-    # Validation set: 95% class 0, 5% class 1
-    val_class_0_size = int(0.95 * val_size)
-    val_class_1_size = val_size - val_class_0_size
+    # # Validation set: 95% class 0, 5% class 1
+    # val_class_0_size = int(0.95 * val_size)
+    # val_class_1_size = val_size - val_class_0_size
     
-    # Ensure we don't request more samples than available
-    val_class_0_size = min(val_class_0_size, len(class_0_indices))
-    val_class_1_size = min(val_class_1_size, len(class_1_indices))
+    # # Ensure we don't request more samples than available
+    # val_class_0_size = min(val_class_0_size, len(class_0_indices))
+    # val_class_1_size = min(val_class_1_size, len(class_1_indices))
+
+    # # print( 'pos in validaiton', 100*val_class_1_size/(val_size) )
     
-    # Randomly select samples for validation
-    np.random.shuffle(class_0_indices)
-    np.random.shuffle(class_1_indices)
+    # # Randomly select samples for validation
+    # np.random.RandomState(42).shuffle(class_0_indices)
+    # # np.random.shuffle(class_1_indices)
     
-    val_class_0_indices = class_0_indices[:val_class_0_size]
-    val_class_1_indices = class_1_indices[:val_class_1_size]
+    # val_class_0_indices = class_0_indices[:val_class_0_size]
+
     
-    # Combine validation indices and the remaining for training
-    val_indices = np.concatenate([val_class_0_indices, val_class_1_indices])
-    train_indices = np.setdiff1d(np.arange(len(y_train)), val_indices)
+    # idx_eligible_pos = np.where( ( sources!='CODE-15%') &  ( y_train == 1 )  )[0]
+    # np.random.RandomState(42).shuffle(idx_eligible_pos)
+   
+
+
+    # val_class_1_indices = idx_eligible_pos[:val_class_1_size]
+    
+    # # Combine validation indices and the remaining for training
+    # val_indices = np.concatenate([val_class_0_indices, val_class_1_indices])
+    # train_indices = np.setdiff1d(np.arange(len(y_train)), val_indices)
     
     # Create train and validation sets
-    X_train = X_train_features[train_indices]
-    y_train_split = y_train[train_indices]
-    X_val = X_train_features[val_indices]
-    y_val = y_train[val_indices]
+    X_train = X_train_features#[train_indices]
+    y_train_split = y_train#[train_indices]
+  
+
+    # X_val = X_train_features[val_indices]
+    # y_val = y_train[val_indices]
+    
+
+    # print( 'pos in validaiton', 100*np.sum(y_val==1)/len(y_val) )
+
+    ### Pre-process to handle infinite values
+    print("Checking for and replacing infinite values...")
+    # Replace inf/-inf with NaN so the imputer can handle them properly
+    X_train = np.nan_to_num(X_train, nan=np.nan, posinf=np.nan, neginf=np.nan)
+    # X_val = np.nan_to_num(X_val, nan=np.nan, posinf=np.nan, neginf=np.nan)
+
 
 
     ### Imputation of missing values
     shape_original_train =  X_train.shape
-    shape_original_val = X_val.shape
+    # shape_original_val = X_val.shape
     imputer = KNNImputer(n_neighbors=7)
 
-    print( X_val.shape ) 
+    # print( X_val.shape ) 
     X_train = imputer.fit_transform( X_train.reshape(-1, shape_original_train[1]*shape_original_train[2] ) ).reshape( shape_original_train )
 
-    X_val = imputer.transform( X_val.reshape(-1, shape_original_val[1]*shape_original_val[2] ) ).reshape( shape_original_val )
+    # X_val = imputer.transform( X_val.reshape(-1, shape_original_val[1]*shape_original_val[2] ) ).reshape( shape_original_val )
 
 
     
     print(f"Training set: {len(y_train_split)} samples ({np.sum(y_train_split == 0)} class 0, {np.sum(y_train_split == 1)} class 1)")
-    print(f"Validation set: {len(y_val)} samples ({np.sum(y_val == 0)} class 0, {np.sum(y_val == 1)} class 1)")
+    # print(f"Validation set: {len(y_val)} samples ({np.sum(y_val == 0)} class 0, {np.sum(y_val == 1)} class 1)")
 
     print(f"X_train shape: {X_train.shape}")  # Should be (num_samples, 12, 6)
     
@@ -1476,31 +1518,42 @@ def train_model(data_folder, model_folder, verbose):
     # Reshape for scaling, fitting on training data only
     original_train_shape = X_train.shape
     X_train_flat = X_train.reshape(original_train_shape[0], -1)
-    X_val_flat = X_val.reshape(X_val.shape[0], -1)
+    # X_val_flat = X_val.reshape(X_val.shape[0], -1)
     
     X_train_scaled_flat = scaler.fit_transform(X_train_flat)
-    X_val_scaled_flat = scaler.transform(X_val_flat)
+    # X_val_scaled_flat = scaler.transform(X_val_flat)
     
     # Reshape back to original dimensions
     X_train_scaled = X_train_scaled_flat.reshape(original_train_shape)
-    X_val_scaled = X_val_scaled_flat.reshape(X_val.shape)
+    # X_val_scaled = X_val_scaled_flat.reshape(X_val.shape)
     
     # check if features are nan or not
-    if np.isnan(X_train_scaled).any() or np.isnan(X_val_scaled).any():
-        raise ValueError("NaN values found in scaled features. Check the input data and scaling process.")
+    # if np.isnan(X_train_scaled).any() or np.isnan(X_val_scaled).any():
+    #     raise ValueError("NaN values found in scaled features. Check the input data and scaling process.")
 
     # Create tensor datasets
     train_dataset = TensorDataset(
         torch.tensor(X_train_scaled, dtype=torch.float32),
         torch.tensor(y_train_split, dtype=torch.long)
+       
+        
     )
+
     val_dataset = TensorDataset(
-        torch.tensor(X_val_scaled, dtype=torch.float32),
-        torch.tensor(y_val, dtype=torch.long)
+        torch.tensor(X_train_scaled, dtype=torch.float32),
+        torch.tensor(y_train_split, dtype=torch.long)
+      
     )
+
+    # val_dataset = TensorDataset(
+    #     torch.tensor(X_val_scaled, dtype=torch.float32),
+    #     torch.tensor(y_val, dtype=torch.long)
+      
+    # )
     
-    train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=256, shuffle=False)
+    batch_size = 256 # 32
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -1511,8 +1564,8 @@ def train_model(data_folder, model_folder, verbose):
     
     # Create model
     model = gnn_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
+ 
 
-    # model = DomainAdaptationModel(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
     # model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
 
 
@@ -1522,22 +1575,27 @@ def train_model(data_folder, model_folder, verbose):
     class_weights_0 = torch.tensor([1.0, num_0s/num_1s], dtype=torch.float32).to(DEVICE)
     print(f"Class weights: {class_weights_0}")
     
-    focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean', 
-                           task_type='multi-class', num_classes=NUM_CLASSES ).to(DEVICE)
-    criterion = focal_loss.to(DEVICE)
+    crossE_loss = nn.CrossEntropyLoss(class_weights_0).to(DEVICE)
+    criterion = crossE_loss.to(DEVICE)
+    
+    # focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean', 
+    #                        task_type='multi-class', num_classes=NUM_CLASSES ).to(DEVICE)
+    # criterion = focal_loss.to(DEVICE)
 
     # # Create a 2x2 weight matrix that matches the challenge metric
     # # Example: Challenge metric values for [[TN, FP], [FN, TP]]
-    # weight_matrix = torch.tensor([
-    #     [1.0, -0.5],  # Penalties for actual negative class
-    #     [-2.0, 2.0]   # Penalties for actual positive class
-    # ], dtype=torch.float32).to(DEVICE)
+    weight_matrix = torch.tensor([
+        [0.0, -2.0],  # Penalties for actual negative class (TN FP)
+        [-0.0, 0.3 ]   # Penalties for actual positive class (FN TP)
+    ], dtype=torch.float32).to(DEVICE)
 
-    # # Initialize CMLoss with this weight matrix
-    # cm_loss_fn = CMLoss(weight_matrix=weight_matrix).to(DEVICE)
+    # Initialize CMLoss with this weight matrix
+    cm_loss_fn = CMLoss(weight_matrix=weight_matrix).to(DEVICE)
 
 
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE )#, weight_decay=  1e-2 )
+    # optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE )#, weight_decay=  1e-2 )
+    # optimizer = optim.SGD( model.parameters(), lr=LEARNING_RATE,
+                        #    momentum=0.9, weight_decay=1e-4 )#, weight_decay=  1e-2 )
 
     # total_steps = len(train_dataloader) * EPOCHS
     # scheduler = get_cosine_schedule_with_warmup(optimizer, 
@@ -1545,8 +1603,10 @@ def train_model(data_folder, model_folder, verbose):
 
     
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-5)
+    
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0 =2, T_mult = 2)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0 =2, T_mult = 2)
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
 
     
     # scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -1576,31 +1636,47 @@ def train_model(data_folder, model_folder, verbose):
     patience = 50  # Number of epochs to wait for improvement
     patience_counter = 0
     
-    # Import the official challenge score function
-    from helper_code import compute_challenge_score
     
-    domain_crit = nn.CrossEntropyLoss()
 
-    max_alpha = 1
-    dom_weight = 1
-    wei_rank = 0.001
+
+ 
+ 
+    step = 0
+
+
+    # ###################################################################
+
+ 
+    EPOCHS =   120
+
+    # snap = np.array( [ 2,	6,	14	,30	,62,	126 ] ) -1 
+    snap = np.array( [ 30,	60, 90, 120  ] ) -1
+    # snap = np.array( [ 30,	90, 210 ] ) -1
+
+    snapshots = []
+
+    # optimizer = optim.SGD(model.parameters(), lr=1e-2, weight_decay=1e-4 )
+
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-1 )
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 
+                                                                    #  T_0 =30, T_mult = 1)
     
-    for epoch in range(EPOCHS):
+    def exp_warm_restart(epoch, T_0=30):
+        # epoch % T_0 gives you position in current cycle
+        cycle_epoch = epoch % T_0
+        gamma = 0.1
+        return gamma ** (cycle_epoch / T_0) # 1.0 - (cycle_epoch / T_0)  # linear decay from 1.0 → 0.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, 
+                                                  lr_lambda=lambda epoch: exp_warm_restart(epoch, T_0=30))
+    
+    
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 
+    #                                                                  T_0 =30, T_mult = 2)
+
+    
+    for epoch in range( EPOCHS):
         print(f'Epoch {epoch+1}/{EPOCHS}')
-
-        for i, pg in enumerate(optimizer.param_groups):
-            lr = pg['lr']
-        print(f"Param group {i}: lr = {lr}")
-
-
-        # p         = epoch / EPOCHS
-        # grl_alpha = max_alpha * (2.0 / (1.0 + np.exp(-10 * p)) - 1.0)
-        # correct_domain_predictions_source= 0
-        # correct_domain_predictions_target = 0
-        # total_source = 0
-        # total_target = 0
-
-        # optimizer = optimizer_scheduler(optimizer, LEARNING_RATE, p)
 
         
         # Training phase
@@ -1608,105 +1684,75 @@ def train_model(data_folder, model_folder, verbose):
         epoch_loss = 0.0
         all_train_predictions = []
         all_train_labels = []
-        target_iter = iter(val_dataloader)
+      
         
         for batch_features, batch_labels in train_dataloader:
+
+            #p  =  torch.tensor( step / (EPOCHS* len(train_dataloader) ) , dtype=torch.float32, device=DEVICE)
+            
+            # alpha_epoch =   max_alpha * (2.0 / (1.0 + torch.exp(-10 * p)) - 1.0)
+            # optimizer = optimizer_scheduler(optimizer, LEARNING_RATE, p)
+            # step += 1
+
 
 
             batch_features = batch_features.to(DEVICE)
             batch_labels = batch_labels.to(DEVICE)
             
+            
             optimizer.zero_grad()
-            outputs = model(batch_features )
+
+    
+            outputs  = model(batch_features  )
+            probabilities = F.softmax(outputs, dim=1)
+                
+            # print( batch_labels_all.shape, logits_all.shape )
             
-            # outputs, domain_source = model(batch_features, grl_alpha )
-
-            # # grab a batch of unlabeled target images
-            # try:
-            #     imgs_t, _  = next(target_iter)
-            # except StopIteration:
-            #     target_iter = iter(val_dataloader)
-            #     imgs_t, _ = next(target_iter)
-
+            # f_loss = criterion(outputs, batch_labels)
             
-            
-            # imgs_t = imgs_t.to(DEVICE)
+            # scores = F.softmax(outputs, dim=1)[:, 1] 
+            # # Compute ranking hinge loss
+            # ranking_loss = ranking_hinge_loss(scores, batch_labels, margin=2.0, num_pairs=10000)
 
-            # _, domain_target = model(imgs_t, grl_alpha )
+            all_train_labels.extend(batch_labels.cpu().numpy())
 
-
-
-            f_loss = criterion(outputs, batch_labels)
-            scores = F.softmax(outputs, dim=1)[:, 1] 
-
-            # Compute ranking hinge loss
-            ranking_loss = ranking_hinge_loss(scores, batch_labels, margin=2.0, num_pairs=10000)
-            
-            # #CMloss
-            # Convert labels to one-hot encoding for CMLoss
-            # one_hot_labels = F.one_hot(batch_labels, num_classes=NUM_CLASSES).float()
-            # cm_loss = cm_loss_fn(outputs, one_hot_labels)  # Pass one-hot labels instead of class indices
-            # loss = cm_loss
-
-            loss = f_loss + ( ranking_loss) # +.0001*cm_loss
-            
-            # loss = f_loss + (wei_rank * ranking_loss) # +.0001*cm_loss
-            # Combined loss
-            # print(f_loss, ranking_loss, cm_loss )
-            
-            #if epch is even, use the combined loss
-            # if epoch % 2 == 0:
-            #     loss =  f_loss + (2 * ranking_loss) # +.0001*cm_loss
-            # else:
-            # one_hot_labels = F.one_hot(batch_labels, num_classes=NUM_CLASSES).float()
-            # cm_loss = cm_loss_fn(outputs, one_hot_labels)  # Pass one-hot labels instead of class indices
-            
-
-            # ds = torch.zeros(batch_features.size(0), dtype=torch.long, device=DEVICE)
-            # dt = torch.ones (imgs_t.size(0), dtype=torch.long, device=DEVICE)
-
-            # loss_dom_s = domain_crit(domain_source, ds)
-            # loss_dom_t = domain_crit(domain_target, dt)
-            
+            one_hot_labels = F.one_hot(batch_labels, num_classes=NUM_CLASSES).float()
+            cm_loss = cm_loss_fn(outputs, one_hot_labels)  # Pass one-hot labels instead of class indices
 
 
-            # total_loss = loss + dom_weight*(loss_dom_s + loss_dom_t)
+            loss =   cm_loss # f_loss + ( ranking_loss)
 
-            # predicted_domain_labels_source = torch.argmax(torch.softmax(domain_source, dim=1), dim=1)
-            # correct_domain_predictions_source += (ds == predicted_domain_labels_source).sum().item()
-            # total_source += ds.size(0)
-
-            # predicted_domain_labels_target = torch.argmax(torch.softmax(domain_target, dim=1), dim=1)
-            # correct_domain_predictions_target += (dt == predicted_domain_labels_target).sum().item()
-            # total_target += dt.size(0)
-            
-            
 
             loss.backward()
             optimizer.step()
-            # scheduler.step()
+           
             
             epoch_loss += loss.item() * batch_features.size(0)
             
-            probabilities = F.softmax(outputs, dim=1)
+ 
+            
             predicted = torch.argmax(probabilities, dim=1)
 
             all_train_predictions.extend(predicted.cpu().numpy())
-            all_train_labels.extend(batch_labels.cpu().numpy())
+            
 
-        scheduler.step()  # Update learning rate after each epoch
-
+       
         # Compute training metrics
         epoch_loss /= len(train_dataset)
         train_accuracy = (torch.tensor(all_train_predictions) == torch.tensor(all_train_labels)).sum().item() / len(all_train_labels)
-        train_f1 = f1_score(all_train_labels, all_train_predictions, average='macro')
-
-        # domainSource = correct_domain_predictions_source/total_source
-        # domainTarget = correct_domain_predictions_target/total_target
+        train_f1 = f1_score(all_train_labels, all_train_predictions )
 
         
+
+        for i, pg in enumerate(optimizer.param_groups):
+            lr = pg['lr']
+
+        print(f'current learning rate :{lr}')
+
+        scheduler.step()  # Update learning rate after each epoch
         
-        print(f'Training - Loss: {epoch_loss:.4f}, Accuracy: {train_accuracy:.4f}, F1 Score: {train_f1:.4f} ')
+        
+        print(f'Training - Loss: {epoch_loss:.4f}, Accuracy: {train_accuracy:.4f}, F1 Score: {train_f1:.4f}   ')
               
               #, Domain Score: {domainSource:.4f} target: {domainTarget:.4f}')
         
@@ -1720,8 +1766,10 @@ def train_model(data_folder, model_folder, verbose):
             for batch_features, batch_labels in val_dataloader:
                 batch_features = batch_features.to(DEVICE)
                 batch_labels = batch_labels.to(DEVICE)
+              
                 
-                outputs = model(batch_features )
+                outputs  = model( batch_features )
+
                 # outputs, _ = model(batch_features, 0.0 )
                 probabilities =  F.softmax(outputs, dim=1)
                 
@@ -1734,61 +1782,150 @@ def train_model(data_folder, model_folder, verbose):
         
         # Compute validation metrics
         val_accuracy = (torch.tensor(val_predictions) == torch.tensor(val_ground_truth)).sum().item() / len(val_ground_truth)
-        val_f1 = f1_score(val_ground_truth, val_predictions, average='macro')
+        val_f1 = f1_score(val_ground_truth, val_predictions )
         
-        # Calculate challenge score on validation set
-        # Use fewer permutations during training for speed
-        val_challenge_score = compute_challenge_score(
-            val_ground_truth, 
-            val_probabilities,
-            num_permutations=10**4  # Reduced from 10^4 for faster computation during training
-        )
+        # # Calculate challenge score on validation set
+        # # Use fewer permutations during training for speed
+        # val_challenge_score = compute_challenge_score(
+        #     val_ground_truth, 
+        #     val_probabilities,
+        #     num_permutations=10**4  # Reduced from 10^4 for faster computation during training
+        # )
 
         
-        print(f'Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}, Challenge Score: {val_challenge_score:.4f}')
+        print(f'Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}' ) #, Challenge Score: {val_challenge_score:.4f}')
         
-        # Save model if challenge score improves
-        if (val_challenge_score > best_challenge_score) or ( val_challenge_score == best_challenge_score and val_f1 > best_F1 ) :
-            best_challenge_score = val_challenge_score
-            best_F1 = val_f1
-            patience_counter = 0
-            print(f"New best challenge score: {best_challenge_score:.4f}, saving model...")
+
+        if epoch in snap:
+            # save weights
+            snapshot = {k: v.clone() for k, v in model.state_dict().items()}
+            snapshots.append( (epoch, snapshot) )
+
+        # if (val_challenge_score > best_challenge_score)  :
+        #     best_challenge_score = val_challenge_score
+          
+        #     print(f"New best challenge score: {best_challenge_score:.4f} ")
+
+        # print(f"Best validation challenge score so far: {best_challenge_score:.4f}")
             
-            # Save the model
-            os.makedirs(model_folder, exist_ok=True)    
-            save_model(model_folder, model, scaler, imputer )
-        else:
-            patience_counter += 1
-            print(f"Challenge score did not improve. Patience: {patience_counter}/{patience}")
+
+
+    _, first_weights = snapshots[0]
+    avg_weights = {k: v.clone() for k, v in first_weights.items()}
+    for v in avg_weights.values():
+        v.zero_()
+
+    num_snapshots = len(snapshots)
+
+    for _, state_dict in snapshots:
+        for k, v in state_dict.items():
+            avg_weights[k] += v
+
+    for v in avg_weights.values():
+        v /= num_snapshots
+
+    # Load averaged weights
+    model.load_state_dict(avg_weights)
+
+    # Save the model
+    os.makedirs(model_folder, exist_ok=True)    
+    save_model(model_folder, model, scaler, imputer )
+
+
+    del model
+
+    print("after averaging")
+    model = load_model(model_folder, verbose)
+
+
+    # Validation phase
+    model.eval()
+    val_predictions = []
+    val_probabilities = []
+    val_ground_truth = []
+    
+    with torch.no_grad():
+        for batch_features, batch_labels in val_dataloader:
+            batch_features = batch_features.to(DEVICE)
+            batch_labels = batch_labels.to(DEVICE)
             
-            if patience_counter >= patience:
-                print(f"Early stopping after {patience} epochs without improvement")
-                break
-        print(f"Best validation challenge score so far: {best_challenge_score:.4f}")
-        if torch.isnan(loss):
-            print(f"WARNING: Loss became NaN at epoch {epoch+1}")
-            print("Last batch details:")
-            print(f"  - Focal loss: {f_loss.item() if not torch.isnan(f_loss) else 'NaN'}")
-            print(f"  - Ranking loss: {ranking_loss.item() if not torch.isnan(ranking_loss) else 'NaN'}")
             
-            # If we have a good model already, just use it
-            if best_challenge_score > 0.3:
-                print(f"Using previously saved model with score: {best_challenge_score:.4f}")
-                break
-            else:
-                # No good model yet, but training has become unstable
-                print(f"No good model found yet (best: {best_challenge_score:.4f}). Training is unstable.")
-                print("Restarting from the latest checkpoint with lower learning rate might help.")
-                break  # It's usually better to break and restart with different settings
+            outputs  = model( batch_features )
+
+            # outputs, _ = model(batch_features, 0.0 )
+            probabilities =  F.softmax(outputs, dim=1)
+            
+            predicted = torch.argmax(probabilities, dim=1)
+            # _, predicted = torch.max(outputs, 1)
+            
+            val_predictions.extend(predicted.cpu().numpy())
+            val_probabilities.extend(probabilities[:, 1].cpu().numpy())  # Probability for positive class
+            val_ground_truth.extend(batch_labels.cpu().numpy())
+    
+    # Compute validation metrics
+    val_accuracy = (torch.tensor(val_predictions) == torch.tensor(val_ground_truth)).sum().item() / len(val_ground_truth)
+    val_f1 = f1_score(val_ground_truth, val_predictions )
+    
+    # Calculate challenge score on validation set
+    # Use fewer permutations during training for speed
+    val_challenge_score = compute_challenge_score(
+        val_ground_truth, 
+        val_probabilities,
+        num_permutations=10**4  # Reduced from 10^4 for faster computation during training
+    )
+
+    
+    print(f'Final Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}, Challenge Score: {val_challenge_score:.4f}')
+        
+
+
+
+        # # Save model if challenge score improves
+        # if (val_challenge_score > best_challenge_score) or ( val_challenge_score == best_challenge_score and val_f1 > best_F1 ) :
+        #     best_challenge_score = val_challenge_score
+        #     best_F1 = val_f1
+        #     patience_counter = 0
+        #     print(f"New best challenge score: {best_challenge_score:.4f}, saving model...")
+            
+        #     # Save the model
+        #     os.makedirs(model_folder, exist_ok=True)    
+        #     save_model(model_folder, model, scaler, imputer )
+        # else:
+        #     patience_counter += 1
+        #     print(f"Challenge score did not improve. Patience: {patience_counter}/{patience}")
+            
+        #     if patience_counter >= patience:
+        #         print(f"Early stopping after {patience} epochs without improvement")
+        #         break
+        # print(f"Best validation challenge score so far: {best_challenge_score:.4f}")
+        # if torch.isnan(loss):
+        #     print(f"WARNING: Loss became NaN at epoch {epoch+1}")
+        #     print("Last batch details:")
+        #     print(f"  - Focal loss: {f_loss.item() if not torch.isnan(f_loss) else 'NaN'}")
+        #     print(f"  - Ranking loss: {ranking_loss.item() if not torch.isnan(ranking_loss) else 'NaN'}")
+            
+        #     # If we have a good model already, just use it
+        #     if best_challenge_score > 0.3:
+        #         print(f"Using previously saved model with score: {best_challenge_score:.4f}")
+        #         break
+        #     else:
+        #         # No good model yet, but training has become unstable
+        #         print(f"No good model found yet (best: {best_challenge_score:.4f}). Training is unstable.")
+        #         print("Restarting from the latest checkpoint with lower learning rate might help.")
+        #         break  # It's usually better to break and restart with different settings
   
     # if best_challenge_score < 0.3:
     #     print("Warning: Best validation challenge score is below 0.3, indicating poor model performance.")
     #     print(f"Best challenge score achieved: {best_challenge_score:.4f}")
     #     raise ValueError("Model training did not achieve a satisfactory challenge score.")
     
-    print(f"Training complete. Best validation challenge score: {best_challenge_score:.4f}")
+    #print(f"Training complete. Best validation challenge score: {best_challenge_score:.4f}")
 
-            
+    # file_name = "val_score.txt"
+    # content = f"Best val set challenge score was {best_challenge_score}"
+
+    # with open(file_name, "w") as file:
+    #     file.write(content)
     
     if verbose:
         print('Done.')
@@ -1819,6 +1956,7 @@ def run_model(record, model, verbose):
     # Apply scaling
     original_shape = features_array.shape
     features_flat = features_array.reshape(1, -1)  # Flatten for scaling
+    features_flat = np.nan_to_num(features_flat, nan=np.nan, posinf=np.nan, neginf=np.nan)
     features_imputed = model.imputer.transform(features_flat)
     features_scaled = model.feature_scaler.transform(features_imputed)
     features_scaled = features_scaled.reshape(original_shape)  # Reshape back to (12, 6)
@@ -1871,8 +2009,8 @@ def load_model(model_folder, verbose):
     
     
     # Create and load model
-    model = gnn_model(input_dim=29, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
-    # model = conv_model(input_dim=29, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
+    model = gnn_model(input_dim=30, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
+    # model = conv_model(input_dim=30, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
     
     model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     model.eval()
