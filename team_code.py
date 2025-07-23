@@ -60,11 +60,11 @@ def seed_everything(seed: int = 42):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = False
     # PyTorch ≥1.8: force deterministic algorithms
     try:
-        torch.use_deterministic_algorithms(True)
+        torch.use_deterministic_algorithms(False)
     except AttributeError:
         pass
 
@@ -1332,7 +1332,28 @@ def train_model(data_folder, model_folder, verbose):
     X_train_features = []
     y_train = []
     sources = []
+models = []
+k = 5  # Number of models to train
 
+for i in range(k):
+    # Sample different set of negatives each time
+    sampled_neg_indices = np.random.choice(neg_indices, len(pos_indices), replace=False)
+    balanced_indices = np.concatenate([sampled_neg_indices, pos_indices])
+    
+    # Train model on this subset
+    X_subset = X_train[balanced_indices]
+    y_subset = y_train[balanced_indices]
+    
+    # Train model and append to list
+    model = train_single_model(X_subset, y_subset)
+    models.append(model)
+    
+# For prediction, average probabilities or use voting
+def ensemble_predict(models, X):
+    probs = np.zeros(len(X))
+    for model in models:
+        probs += model.predict_proba(X)[:,1]
+    return probs / len(models)
     for record_path, features, label, source in results:
         X_train_features.append(features)
         y_train.append(label)
