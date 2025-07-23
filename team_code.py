@@ -255,14 +255,18 @@ class gnn_model(nn.Module):
         
         # 3. covariance
         #    (use F−1 if you set unbiased=True above so that denominator matches)
-        cov = a_centered @ a_centered.transpose(1, 2) / (F - 1)   # → [batch, C, C]
+        # cov = a_centered @ a_centered.transpose(1, 2) / (F - 1)   # → [batch, C, C]
+
+        cov = (a_centered.cpu() @ a_centered.transpose(1, 2).cpu()) / (F - 1)
+        
 
         # 4. outer product of stds
-        var_outer = a_std @ a_std.transpose(1, 2)                # → [batch, C, C]
+        var_outer = a_std.cpu() @ a_std.transpose(1, 2).cpu()               # → [batch, C, C]
 
         # 5. correlation matrix
         corr = cov / (var_outer + 1e-8)                              # → [batch, C, C]
 
+        corr = corr.to(x.device)  
         # print(torch.min(corr) ) 
         # corr     = corr - corr.min()
         corr     = torch.relu(corr ) #+ torch.eye(12).to(DEVICE) # Normalize to [0, 1]
@@ -1332,28 +1336,7 @@ def train_model(data_folder, model_folder, verbose):
     X_train_features = []
     y_train = []
     sources = []
-models = []
-k = 5  # Number of models to train
 
-for i in range(k):
-    # Sample different set of negatives each time
-    sampled_neg_indices = np.random.choice(neg_indices, len(pos_indices), replace=False)
-    balanced_indices = np.concatenate([sampled_neg_indices, pos_indices])
-    
-    # Train model on this subset
-    X_subset = X_train[balanced_indices]
-    y_subset = y_train[balanced_indices]
-    
-    # Train model and append to list
-    model = train_single_model(X_subset, y_subset)
-    models.append(model)
-    
-# For prediction, average probabilities or use voting
-def ensemble_predict(models, X):
-    probs = np.zeros(len(X))
-    for model in models:
-        probs += model.predict_proba(X)[:,1]
-    return probs / len(models)
     for record_path, features, label, source in results:
         X_train_features.append(features)
         y_train.append(label)
@@ -1363,8 +1346,8 @@ def ensemble_predict(models, X):
     
     
 
-    X_train_features = np.array(X_train_features)
-    y_train = np.array(y_train)
+    # X_train_features = np.array(X_train_features)
+    # y_train = np.array(y_train)
 
 
     
@@ -1445,7 +1428,7 @@ def ensemble_predict(models, X):
 
     # feat_idx = [ i for i in range(len( feature_names) ) if feature_names[i] in desired_feat ]
     # X_train_features = data['X_train_features']#[:, :, feat_idx]  # Ensure we only take the first 12 leads
-    # print('ffff',X_train_features.shape)
+    # # print('ffff',X_train_features.shape)
     
     # y_train = data['y_train']
     
