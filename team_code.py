@@ -1009,6 +1009,7 @@ def process_single_record(record, desired_sampling_rate=100, train=True, feature
         label = load_label(record)
         label = np.array(label).astype(np.long)
         source = get_source(load_header(record))
+        # print('label', label)
         # print(f"Processed record: {record}, features shape: {features_array.shape}")
         return record, features_array, label, source#, feature_medians
     else:
@@ -1118,6 +1119,7 @@ def load_and_process_signal_train(records,
             for future in as_completed(futures):
                 try:
                     record_result = future.result()
+                    # print( 'record_result', record_result[-2])
                     
                     results.append(record_result)
                     
@@ -1323,42 +1325,52 @@ def train_model(data_folder, model_folder, verbose):
     # print(f"Sampling ratio for CODE-15 negatives: {sample_size}/{len(code15_neg_records)} = {100*sample_size/max(1,len(code15_neg_records)):.2f}%")
 
 
+    load_features = True
 
-    results = load_and_process_signal_train(
-        record_paths, #record_paths,
-        desired_sampling_rate=100,
-        train=True,
-        batch_size=5,  # Process 5 records at a time,
-        feature_config=basic_config
-    )
+    if load_features:
+        results = load_and_process_signal_train(
+            record_paths, #record_paths,
+            desired_sampling_rate=100,
+            train=True,
+            batch_size=5,  # Process 5 records at a time,
+            feature_config=basic_config
+        )
+
+        # Extract features, labels, and other data
+        X_train_features = []
+        y_train = []
+        sources = []
+
+        for record_path, features, label, source in results:
+            # print(label)
+            X_train_features.append(features)
+            y_train.append(label)
+            sources.append(source)
+
+
+        X_train_features = np.array(X_train_features)
+        y_train = np.array(y_train)
+
+
     
-    # Extract features, labels, and other data
-    X_train_features = []
-    y_train = []
-    sources = []
+        # print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
+        # print(f"y_train shape: {y_train.shape}")
 
-    for record_path, features, label, source in results:
-        X_train_features.append(features)
-        y_train.append(label)
-        sources.append(source)
-
-
+        # # # # # ################################################################################################
+        # # # # # # Optionally save/load features to avoid reprocessing
+        #np.savez("fold_2_training_features_new_val.npz", X_train_features=X_train_features, y_train=y_train, sources=sources) 
     
-    
+    else:
+        data = np.load("fold_2_training_features_new_val.npz", allow_pickle=True)
 
-    # X_train_features = np.array(X_train_features)
-    # y_train = np.array(y_train)
-
-
-    
-    # print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
-    # print(f"y_train shape: {y_train.shape}")
-
-    # # # # # ################################################################################################
-    # # # # # # Optionally save/load features to avoid reprocessing
-    # np.savez("fold_2_training_features_new_val.npz", X_train_features=X_train_features, y_train=y_train, sources=sources) 
-    
-    # data = np.load("fold_2_training_features_new_val.npz", allow_pickle=True)
+        # feat_idx = [ i for i in range(len( feature_names) ) if feature_names[i] in desired_feat ]
+        X_train_features = data['X_train_features']#[:, :, feat_idx]  # Ensure we only take the first 12 leads
+        # print('ffff',X_train_features.shape)
+        
+        y_train = data['y_train']
+        
+        sources = data['sources']
+   
 
     # feature_names = [ 
     #     'Mean_QRS_Duration_ms' ,
@@ -1426,14 +1438,7 @@ def train_model(data_folder, model_folder, verbose):
 
     # desired_feat = desired_feat[:26]
 
-    # feat_idx = [ i for i in range(len( feature_names) ) if feature_names[i] in desired_feat ]
-    # X_train_features = data['X_train_features']#[:, :, feat_idx]  # Ensure we only take the first 12 leads
-    # # print('ffff',X_train_features.shape)
     
-    # y_train = data['y_train']
-    
-    # sources = data['sources']
-   
     
     ################################################################################################
     # from imblearn.over_sampling import SMOTE
