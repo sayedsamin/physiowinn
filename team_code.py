@@ -1293,7 +1293,7 @@ def train_model(data_folder, model_folder, verbose):
     # print(f"Sampling ratio for CODE-15 negatives: {sample_size}/{len(code15_neg_records)} = {100*sample_size/max(1,len(code15_neg_records)):.2f}%")
 
 
-    calculate_features = False # True
+    calculate_features = True # True
 
     if calculate_features:
         results = load_and_process_signal_train(
@@ -2211,9 +2211,9 @@ def run_model(record, model, verbose):
     score2 /= weights
     score3 /= weights
 
-    score1 = torch.from_numpy(score1)
-    score2 = torch.from_numpy(score2)
-    score3 = torch.from_numpy(score3)
+    score1 = torch.from_numpy(score1).to(DEVICE)
+    score2 = torch.from_numpy(score2).to(DEVICE)
+    score3 = torch.from_numpy(score3).to(DEVICE)
 
     features_imputed = m1.imputer.transform(features_flat)
     features_scaled = m1.feature_scaler.transform(features_imputed)
@@ -2243,7 +2243,8 @@ def run_model(record, model, verbose):
         # print(probs)
 
    
-        pred_class = int(np.argmax(probs))
+        probs_cpu = probs.cpu().numpy()
+        pred_class = int(np.argmax(probs_cpu))
 
         # print(pred_class)
    
