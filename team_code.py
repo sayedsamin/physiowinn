@@ -39,7 +39,7 @@ import neurokit2 as nk
 from helper_code import load_signals, load_label, load_header, get_source
 from transformers import get_cosine_schedule_with_warmup
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.impute import KNNImputer
+from sklearn.impute import KNNImputer, SimpleImputer
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -150,7 +150,7 @@ def ranking_hinge_loss(scores, target, margin=1.0, num_pairs=1000):
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-LEARNING_RATE =   5e-4# 0.0001 *8 # # it was 0.001 for transformer
+
 SPATIAL_INPUT_DIM = 10
 TEMPORAL_INPUT_DIM = 120
 N_HEADS = 1
@@ -181,12 +181,12 @@ class gnn_model(nn.Module):
         self.num_classes = num_classes
 
         self.adj_linear = nn.Parameter(torch.rand(num_leads, input_dim), requires_grad=True)
-        
-        self.activation = nn.SELU() # nn.LeakyReLU() #  nn.GELU() #  nn.GELU() # nn.LeakyReLU() # 
+   
+        self.activation = nn.SELU() # nn.LeakyReLU() #  nn.GELU() #  nn.GELU() # nn.LeakyReLU() #
         #make conv1 as a sequential layer
         expand = input_dim*10
         self.gnn1 = nn.Sequential( nn.Linear(input_dim, expand  ),
-                                
+                   
             self.activation,
               nn.LayerNorm(  expand ),
               nn.Dropout(0.2)
@@ -225,7 +225,7 @@ class gnn_model(nn.Module):
         self.dropout = nn.Dropout(0.7)
         self.flatten = nn.Flatten()
 
-        
+   
     def forward(self, x):
 
         # x = x.permute(0, 2, 1)  # Change shape to (batch_size,  input_dim, num_leads )
@@ -237,10 +237,10 @@ class gnn_model(nn.Module):
 
 
         ### calculating adjencney matrix
-        a = x #* self.adj_linear 
-        
+        a = x #* self.adj_linear
+   
         # do sigmoid
-        # a =  self.activation(a )  # Normalize across features 
+        # a =  self.activation(a )  # Normalize across features
         #a = torch.sigmoid(a)
 
         # .activation( a )
@@ -252,13 +252,13 @@ class gnn_model(nn.Module):
 
         a_centered = a -a_mean
 
-        
+   
         # 3. covariance
         #    (use F−1 if you set unbiased=True above so that denominator matches)
         # cov = a_centered @ a_centered.transpose(1, 2) / (F - 1)   # → [batch, C, C]
 
         cov = (a_centered.cpu() @ a_centered.transpose(1, 2).cpu()) / (F - 1)
-        
+   
 
         # 4. outer product of stds
         var_outer = a_std.cpu() @ a_std.transpose(1, 2).cpu()               # → [batch, C, C]
@@ -267,7 +267,7 @@ class gnn_model(nn.Module):
         corr = cov / (var_outer + 1e-8)                              # → [batch, C, C]
 
         corr = corr.to(x.device)  
-        # print(torch.min(corr) ) 
+        # print(torch.min(corr) )
         # corr     = corr - corr.min()
         corr     = torch.relu(corr ) #+ torch.eye(12).to(DEVICE) # Normalize to [0, 1]
         # print(corr)
@@ -275,14 +275,14 @@ class gnn_model(nn.Module):
 
         corr = corr/( torch.sum(corr, dim=-1, keepdim=True) +1e-6 ) # Normalize across features
 
-      
+     
 
         # # 6. graph‐Laplace normalization
         deg = torch.sum(corr, axis=-1)                              # → [batch, C]
 
         norm_deg = torch.diag_embed( 1.0 / torch.sqrt(deg) + 1e-8 )
 
-       
+   
         norm_adj = torch.matmul(norm_deg, torch.matmul(corr, norm_deg) )
 
 
@@ -308,29 +308,71 @@ class gnn_model(nn.Module):
         # # x = self.linear1(x) # batch size x channels x features
         # # x = self.linear2(x) # batch size x channels x features
 
-       
+   
 
 
 
 
         # #x, _ = torch.max(x, dim=1)  # Aggregate across leads (channels)
-    
+   
 
         # ## x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
         # ## x = self.conv1(x)
         # ## x = self.conv2(x)
-       
+   
         x = self.flatten(x)  # Flatten the output for fully connected layers
-        
+   
         x = self.layer_norm(x)
         x = self.fc1(x)
         x = self.activation(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        
+   
         return x
-    
+   
+class transformer(nn.Module):
+    def __init__(self, input_dim=30, num_leads=12, num_classes=2):
+        super(transformer, self).__init__()
 
+        # temp = input_dim
+        # input_dim = num_leads
+        # num_leads = temp
+
+        self.input_dim = input_dim
+        self.num_leads = num_leads
+        self.num_classes = num_classes
+
+        self.activation = nn.ReLU()
+
+        self.transformer = nn.TransformerEncoderLayer(d_model=input_dim, nhead=4,
+                                           batch_first=True, dim_feedforward = 2*input_dim , activation=self.activation )
+
+   # # )
+
+        units = num_leads*input_dim #
+        unit_out = 128 # 64
+        # Fully connected layers
+        self.layer_norm = nn.LayerNorm(  units )  # Adjust input size based on conv output
+        self.fc1 = nn.Linear(units, unit_out )  # Adjust input size based on conv output
+        self.fc2 = nn.Linear(unit_out, num_classes)
+        self.dropout = nn.Dropout(0.7)
+        self.flatten = nn.Flatten()
+
+   
+    def forward(self, x):
+
+   
+        x = self.transformer(x)
+   
+        x = self.flatten(x)  # Flatten the output for fully connected layers
+   
+        x = self.layer_norm(x)
+        x = self.fc1(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+   
+        return x
 
 class conv_model(nn.Module):
     def __init__(self, input_dim=6, num_leads=12, num_classes=2):
@@ -338,131 +380,49 @@ class conv_model(nn.Module):
         self.input_dim = input_dim
         self.num_leads = num_leads
         self.num_classes = num_classes
-
-        
-
-        self.activation = nn.LeakyReLU() #   nn.GELU() # 
-
-    
-        neurons = 64
-        self.conv1_layer = nn.Conv2d(1, neurons, kernel_size=(12, 1), stride=1)
-        # self.conv2_layer = nn.Conv2d(32, 64, kernel_size=(3, 1), stride=1)
-        
-        dr = .2
+   
+        self.conv1_layer = nn.Conv2d(1, 32, kernel_size=(3, 1), stride=1)
+        self.conv2_layer = nn.Conv2d(32, 64, kernel_size=(3, 1), stride=1)
+   
         #make conv1 as a sequential layer
         self.conv1 = nn.Sequential(
             self.conv1_layer,
-            nn.BatchNorm2d(neurons),
-            self.activation,
-            nn.Dropout(dr),
+            nn.ReLU(),
+            nn.BatchNorm2d(32),
+            nn.Dropout(0.2),
      
         )
-
-        # self.conv2 = nn.Sequential(
-        #     self.conv2_layer,
-        #     nn.BatchNorm2d(64),
-        #     self.activation,
-        #     # nn.AvgPool2d(kernel_size=(2, 1)),  # Downsample
-        #     nn.Dropout(dr)
-        # )
-
-    
-        
-
-        # self.conv2 = nn.Sequential(
-        #     self.conv2_layer,
-        #     nn.BatchNorm2d(64),
-        #     nn.GELU(),
-        #     # nn.AvgPool2d(kernel_size=(2, 1)),  # Downsample
-        #     nn.Dropout(0.2)
-        # )
-
-
-
-
-        # self.conv1_layer = nn.Conv2d(12, 32, kernel_size=(1, 1), stride=1)
-        # self.conv2_layer = nn.Conv2d(32, 64, kernel_size=(1, 1), stride=1)
-    
-        # # #make conv1 as a sequential layer
-        # self.conv1 = nn.Sequential(
-        #     self.conv1_layer,
-        #     nn.BatchNorm2d(32),
-        #     nn.ReLU(),
-        #     nn.Dropout(0.2),
-     
-        # )
-
-        # self.conv2 = nn.Sequential(
-        #     self.conv2_layer,
-        #     nn.BatchNorm2d(64),
-        #     nn.ReLU(),
-        #     nn.Dropout(0.2)
-        # )
-
-        self.encoder = nn.Parameter( torch.randn(12,30), requires_grad=True)
-        self.encoder_layer = nn.TransformerEncoderLayer(d_model=30, nhead=5,
-                                                        dim_feedforward = 60, 
-                                                        batch_first=True ,
-                                                        activation = self.activation,
-                                                         norm_first = True )
-    
-        self.ll = nn.Linear(30, 30 )
+        self.conv2 = nn.Sequential(
+            self.conv2_layer,
+            nn.ReLU(),
+            nn.BatchNorm2d(64),
+            nn.AvgPool2d(kernel_size=(2, 1)),  # Downsample
+            nn.Dropout(0.2)
+        )
 
         # Fully connected layers
-        units = 12*30 #64 * 8 *   input_dim
-        self.layer_norm = nn.LayerNorm(  units )  # Adjust input size based on conv output
-        self.fc1 = nn.Linear(units, 64 )  # Adjust input size based on conv output
-        self.fc2 = nn.Linear(64, num_classes)
-        self.dropout = nn.Dropout(0.2)
+        self.layer_norm = nn.LayerNorm(3072)  # Adjust input size based on conv output
+        self.fc1 = nn.Linear(3072, 128)  # Adjust input size based on conv output
+        self.fc2 = nn.Linear(128, num_classes)
+        self.dropout = nn.Dropout(0.7)
         self.flatten = nn.Flatten()
 
-        
+   
     def forward(self, x):
-
-        # x = self.linear_seq(x)
-        #x = self.encoder_layer_2(x.permute(0, 2, 1)).permute(0, 2, 1)
-        # x = y + z  
-
-        # x = x.permute(0,  2, 1 )  # Change shape to (batch_size,   input_dim, num_leads)
-        # x = x.unsqueeze(-1)
-
-        #x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
-
-       
-        # print(x.shape)  
-        #x = self.conv1(x).squeeze()
-        # print(x.shape)  # Debugging line to check shape after conv1
-        # x = self.conv2(x)
-        # print(x.shape)  # Debugging line to check shape after conv1
-        
-        
-        # x = x.mean(dim=1 ) # B, 8, F # .permute(0,  2, 1 )  # Remove the last dimension: (batch_size, num_leads, features)
-
-        # print( 'oou',  x.shape ) 
-        x = self.encoder + x
-        x = self.encoder_layer(x) # B, 12, 64
-
-        # x = self.activation( self.ll(x) ) #
-
-        # print( 'oou3333333333333333',  x.shape ) 
-
-
+        x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
+        x = self.conv1(x)
+        x = self.conv2(x)
         x = self.flatten(x)  # Flatten the output for fully connected layers
-
-        
         x = self.layer_norm(x)
-        
         x = self.fc1(x)
-        x = self.activation(x)
+        x = F.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        
+   
         return x
 
-# torch.autograd.set_detect_anomaly(True)
 
-
-    
+   
 
 #         return x
 def normalize_signal(signal):
@@ -478,11 +438,11 @@ def normalize_signal(signal):
 
 
 
-def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate, expected_length, 
+def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate, expected_length,
                         feature_config=None):
     """
     Process a single lead and extract requested ECG features with modular selection.
-    
+   
     Args:
         lead_data: Signal data for one lead
         lead_idx: Index of the lead
@@ -492,7 +452,7 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
         feature_config: Dictionary of feature groups to enable/disable:
             {
                 'basic_intervals': True,      # QRS duration, QT interval
-                'amplitude': True,            # R-peak, P-wave amplitudes
+                'amplitude': True,        # R-peak, P-wave amplitudes
                 'hrv': True,                  # Heart rate variability metrics
                 'p_wave': True,               # P wave features
                 'st_segment': True,           # ST segment analysis
@@ -501,37 +461,43 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
                 'qtc': True,                  # Corrected QT interval
                 'qrs_fragmentation': True     # QRS fragmentation detection
             }
-    
+   
     Returns:
         Tuple of (lead_idx, lead_features)
     """
     # Default feature configuration - enable all features
     if feature_config is None:
         feature_config = {
-            'basic_intervals': True,
-            'amplitude': True,
+            'basic_intervals': True,   # Keep QRS, QT intervals
+            'amplitude': True,         # Keep R-peak amplitudes
             'hrv': True,
-            'p_wave': True,
-            'st_segment': True,
-            't_wave': True,
-            'pr_interval': True,
-            'qtc': True,
-            'qrs_fragmentation': True
+            'advanced_hrv': False,               # Keep heart rate variability metrics
+            'p_wave': True,        # Keep P wave features
+            'st_segment': False,       # Disable ST segment analysis
+            't_wave': False,           # Disable T wave features
+            'pr_interval': False,      # Disable PR interval features
+            'qtc': False,              # Disable QTc features
+            'qrs_fragmentation': False, # Disable QRS fragmentation detection
+            'hrv_non_linear': False,  # Enable non-linear HRV features
+            'hrv_welch': False,  # Enable Welch's method for HRV
 
         }
-    
+
+
+   
+   
     # Initialize feature dictionary based on enabled features
     feature_names = []
-    
+   
     # Basic interval features
     if feature_config.get('basic_intervals', True):
         feature_names.extend(['Mean_QRS_Duration_ms', 'Std_QRS_Duration_ms',
                              'Mean_QT_Interval_ms', 'Std_QT_Interval_ms'])
-    
+   
     # Amplitude features
     if feature_config.get('amplitude', True):
         feature_names.extend(['Mean_R_Amplitude', 'Std_R_Amplitude', 'QRS_Net_Deflection'])
-    
+   
     # HRV features
     if feature_config.get('hrv', True):
         feature_names.extend(['RR_Interval_RMSSD_ms'])
@@ -542,39 +508,39 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
     if feature_config.get('hrv_welch', True):
         feature_names.extend(['HRV_LF', 'HRV_HF', 'HRV_LF_norm', 'HRV_LF_HF'])
 
-  
+ 
     # P wave features
     if feature_config.get('p_wave', True):
         feature_names.extend(['Mean_P_Amplitude', 'Std_P_Amplitude',
                              'Mean_P_Duration_ms', 'Std_P_Duration_ms'])
-    
+   
     # ST segment features
     if feature_config.get('st_segment', True):
         feature_names.extend(['ST_Deviation', 'ST_Deviation_Std'])
-    
+   
     # T wave features
     if feature_config.get('t_wave', True):
         feature_names.extend(['Mean_T_Amplitude', 'T_Wave_Inversion_Ratio'])
-    
+   
     # PR interval features
     if feature_config.get('pr_interval', True):
         feature_names.extend(['Mean_PR_Interval_ms', 'Std_PR_Interval_ms'])
-    
+   
     # QTc features
     if feature_config.get('qtc', True):
         feature_names.extend(['QTc_Bazett_ms', 'QTc_Fridericia_ms'])
-    
+   
     # QRS fragmentation
     if feature_config.get('qrs_fragmentation', True):
         feature_names.extend(['QRS_Fragmentation_Ratio'])
-    
+
     # Initialize features dictionary - making then nan by default
     lead_features = {name: np.nan for name in feature_names}
-    
+
     try:
         # 1. Fast normalization
         normalized_signal = normalize_signal(lead_data)
-        
+   
         # 2. Faster resampling with exact length
         resampled_signal = nk.signal_resample(
             normalized_signal,
@@ -582,17 +548,17 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
             desired_sampling_rate=desired_sampling_rate,
             desired_length=expected_length
         )
-        
+
         # 3. Use faster cleaning method - pantompkins is faster than neurokit
         cleaned_signal = nk.ecg_clean(
-            resampled_signal, 
-            sampling_rate=desired_sampling_rate, 
+            resampled_signal,
+            sampling_rate=desired_sampling_rate,
             method="pantompkins"
         )
-        
+
         # 4. Faster R-peak detection
         peaks_hrv, info = nk.ecg_peaks(
-            cleaned_signal, 
+            cleaned_signal,
             sampling_rate=desired_sampling_rate,
             method="pantompkins"
         )
@@ -609,11 +575,11 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
             hrv_nonlinear = nk.hrv_nonlinear(peaks_hrv, sampling_rate=desired_sampling_rate)#, psd_method="welch", normalize=False )
 
 
-            lead_features['HRV_SD1'] = hrv_nonlinear['HRV_SD1'].values[0] 
-            lead_features['HRV_SD2'] = hrv_nonlinear['HRV_SD2'].values[0] 
-            lead_features['HRV_SD1SD2'] = hrv_nonlinear['HRV_SD1SD2'].values[0] 
+            lead_features['HRV_SD1'] = hrv_nonlinear['HRV_SD1'].values[0]
+            lead_features['HRV_SD2'] = hrv_nonlinear['HRV_SD2'].values[0]
+            lead_features['HRV_SD1SD2'] = hrv_nonlinear['HRV_SD1SD2'].values[0]
 
-   
+
         if feature_config.get('hrv_welch', True):
 
             peaks_location  = peaks_hrv.loc[ peaks_hrv['ECG_R_Peaks']==1].index  
@@ -646,7 +612,7 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
             lead_features['HRV_LF_HF'] = lf_power /( 1e-6 + hf_power )
             # print('done spectral')
 
-        
+
         # Extract HRV features
         if feature_config.get('hrv', True):
 
@@ -654,30 +620,31 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
                 rr_intervals = np.diff(r_peaks) / desired_sampling_rate  # in seconds
                 # Filter physiologically reasonable RR intervals (0.3s to 2.0s)
                 valid_rr = rr_intervals[(rr_intervals >= 0.3) & (rr_intervals <= 2.0)]
-                
+    
                 if len(valid_rr) >= 2:
                     # RMSSD - Root Mean Square of Successive Differences
                     rr_diff = np.diff(valid_rr * 1000)  # Convert to ms
                     lead_features['RR_Interval_RMSSD_ms'] = np.sqrt(np.mean(rr_diff**2))
-                    
+         
                     # Advanced HRV metrics
-                    if feature_config.get('advanced_hrv', True) and len(valid_rr) >= 5:
-                        # SDNN - Standard deviation of NN intervals
-                        lead_features['RR_SDNN_ms'] = np.std(valid_rr * 1000)
-                        # pNN50 - Percentage of successive RR intervals that differ by more than 50ms
-                        differences = np.abs(np.diff(valid_rr * 1000))
-                        lead_features['pNN50'] = 100 * np.sum(differences > 50) / len(differences)
-                    else:
-                        lead_features['RR_SDNN_ms'] = np.nan
-                        lead_features['pNN50'] = np.nan
-                    
+                    if feature_config.get('advanced_hrv', True):
+                        if len(valid_rr) >= 5:
+                            # SDNN - Standard deviation of NN intervals
+                            lead_features['RR_SDNN_ms'] = np.std(valid_rr * 1000)
+                            # pNN50 - Percentage of successive RR intervals that differ by more than 50ms
+                            differences = np.abs(np.diff(valid_rr * 1000))
+                            lead_features['pNN50'] = 100 * np.sum(differences > 50) / len(differences)
+                        else:
+                            lead_features['RR_SDNN_ms'] = np.nan
+                            lead_features['pNN50'] = np.nan
+                
         # print('done hrv')
         # 5. Delineate waveforms
-        
+    
         _, waves_info = nk.ecg_delineate(
-            cleaned_signal, 
-            r_peaks, 
-            sampling_rate=desired_sampling_rate, 
+            cleaned_signal,
+            r_peaks,
+            sampling_rate=desired_sampling_rate,
             method="dwt"
         )
 
@@ -688,7 +655,7 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
             if 'ECG_S_Peaks' in waves_info and 'ECG_Q_Peaks' in waves_info:
                 s_peaks = np.array(waves_info['ECG_S_Peaks'])
                 q_peaks = np.array(waves_info['ECG_Q_Peaks'])
-                
+           
                 # Calculate QRS durations directly, handling NaNs
                 qrs_durations = (s_peaks - q_peaks) / desired_sampling_rate
                 valid_qrs = ~np.isnan(qrs_durations) & (qrs_durations > 0)
@@ -696,208 +663,209 @@ def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate,
                     valid_qrs_durations = qrs_durations[valid_qrs]
                     lead_features['Mean_QRS_Duration_ms'] = np.nanmean(valid_qrs_durations) * 1000
                     lead_features['Std_QRS_Duration_ms'] = np.nanstd(valid_qrs_durations) * 1000 if len(valid_qrs_durations) > 1 else 0
-            
+      
             # QT Interval features
             if 'ECG_T_Offsets' in waves_info and 'ECG_Q_Peaks' in waves_info:
                 t_offsets = np.array(waves_info['ECG_T_Offsets'])
                 q_peaks = np.array(waves_info['ECG_Q_Peaks'])
-                
+         
                 qt_intervals = (t_offsets - q_peaks) / desired_sampling_rate
                 valid_qt = ~np.isnan(qt_intervals) & (qt_intervals > 0)
                 if np.any(valid_qt):
                     valid_qt_intervals = qt_intervals[valid_qt]
                     lead_features['Mean_QT_Interval_ms'] = np.nanmean(valid_qt_intervals) * 1000
                     lead_features['Std_QT_Interval_ms'] = np.nanstd(valid_qt_intervals) * 1000 if len(valid_qt_intervals) > 1 else 0
-                    
+           
                     # QTc Calculation
                     if feature_config.get('qtc', True) and len(r_peaks) >= 2:
                         mean_rr = np.mean(np.diff(r_peaks)) / desired_sampling_rate
                         mean_qt_sec = lead_features['Mean_QT_Interval_ms'] / 1000
-                        
+               
                         # Bazett's formula: QTc = QT / √RR
                         lead_features['QTc_Bazett_ms'] = (mean_qt_sec / np.sqrt(mean_rr)) * 1000
-                        
+               
                         # Fridericia's formula: QTc = QT / ∛RR
                         lead_features['QTc_Fridericia_ms'] = (mean_qt_sec / np.cbrt(mean_rr)) * 1000
-                
+       
         # Amplitude features
         if feature_config.get('amplitude', True):
             # R-peak amplitude features
             if len(r_peaks) > 0:
                 lead_features['Mean_R_Amplitude'] = np.nanmean(cleaned_signal[r_peaks])
                 lead_features['Std_R_Amplitude'] = np.nanstd(cleaned_signal[r_peaks])
-            
+     
             # QRS Net Deflection
             if 'ECG_S_Peaks' in waves_info and 'ECG_Q_Peaks' in waves_info and len(r_peaks) > 0:
                 s_peaks = np.array(waves_info['ECG_S_Peaks'])
                 q_peaks = np.array(waves_info['ECG_Q_Peaks'])
-                
+        
                 # Remove NaN values
                 valid_s = s_peaks[~np.isnan(s_peaks)]
                 valid_q = q_peaks[~np.isnan(q_peaks)]
-                
+       
                 if len(valid_s) > 0 and len(valid_q) > 0:
 
                     valid_s_indices = valid_s.astype(int)
                     valid_q_indices = valid_q.astype(int)
-                    
+             
                     # Ensure indices are within bounds
                     valid_s_indices = valid_s_indices[ valid_s_indices < len(cleaned_signal) ]
                     valid_q_indices = valid_q_indices[ valid_q_indices < len(cleaned_signal) ]
-                    
+            
                     if len(valid_s_indices) > 0 and len(valid_q_indices) > 0:
                         s_amplitudes = cleaned_signal[ valid_s_indices ]
                         q_amplitudes = cleaned_signal[ valid_q_indices ]
                         r_amplitudes = cleaned_signal[ r_peaks.astype(int) ]
-                        
+                  
                         mean_qs = (np.nanmean(q_amplitudes) + np.nanmean(s_amplitudes)) / 2
                         qrs_net_deflection = np.nanmean(r_amplitudes) - mean_qs
                         lead_features['QRS_Net_Deflection'] = qrs_net_deflection
-                
+          
         # P wave features
         if feature_config.get('p_wave', True):
             # P Wave Amplitude Features
             if 'ECG_P_Peaks' in waves_info:
                 p_peaks = np.array(waves_info['ECG_P_Peaks'])
-                
+            
                 valid_p = ~np.isnan(p_peaks)
                 if np.any(valid_p):
                     valid_p_indices = p_peaks[valid_p].astype(int)
                     valid_p_indices = valid_p_indices[(valid_p_indices >= 0) & (valid_p_indices < len(cleaned_signal))]
-                    
+            
                     if len(valid_p_indices) > 0:
                         p_amplitudes = cleaned_signal[valid_p_indices]
                         lead_features['Mean_P_Amplitude'] = np.nanmean(p_amplitudes)
                         lead_features['Std_P_Amplitude'] = np.nanstd(p_amplitudes) if len(p_amplitudes) > 1 else 0.0
-            
+        
             # P Wave Duration
             if 'ECG_P_Onsets' in waves_info and 'ECG_P_Offsets' in waves_info:
                 p_onsets = np.array(waves_info['ECG_P_Onsets'])
                 p_offsets = np.array(waves_info['ECG_P_Offsets'])
-                
+           
                 valid_onsets = ~np.isnan(p_onsets)
                 valid_offsets = ~np.isnan(p_offsets)
-                
+          
                 if np.any(valid_onsets) and np.any(valid_offsets):
                     valid_on_indices = p_onsets[valid_onsets].astype(int)
                     valid_off_indices = p_offsets[valid_offsets].astype(int)
-                    
+               
                     valid_on_indices = valid_on_indices[(valid_on_indices >= 0) & (valid_on_indices < len(cleaned_signal))]
                     valid_off_indices = valid_off_indices[(valid_off_indices >= 0) & (valid_off_indices < len(cleaned_signal))]
-                    
+              
                     p_durations = []
                     for on_idx in valid_on_indices:
                         following_offs = valid_off_indices[valid_off_indices > on_idx]
                         if len(following_offs) > 0:
                             p_durations.append((following_offs[0] - on_idx) / desired_sampling_rate)
-                    
+                
                     if len(p_durations) > 0:
                         lead_features['Mean_P_Duration_ms'] = np.nanmean(p_durations) * 1000
                         lead_features['Std_P_Duration_ms'] = np.nanstd(p_durations) * 1000 if len(p_durations) > 1 else 0.0
-                
+           
         # ST segment analysis
         if feature_config.get('st_segment', True):
             if 'ECG_S_Peaks' in waves_info and 'ECG_T_Onsets' in waves_info:
                 s_peaks = np.array(waves_info['ECG_S_Peaks'])
                 t_onsets = np.array(waves_info['ECG_T_Onsets'])
-                
+           
                 valid_s = ~np.isnan(s_peaks)
                 valid_t = ~np.isnan(t_onsets)
-                
+        
                 if np.any(valid_s) and np.any(valid_t):
                     valid_s_indices = s_peaks[valid_s].astype(int)
                     valid_t_indices = t_onsets[valid_t].astype(int)
-                    
+                
                     valid_s_indices = valid_s_indices[(valid_s_indices >= 0) & (valid_s_indices < len(cleaned_signal))]
                     valid_t_indices = valid_t_indices[(valid_t_indices >= 0) & (valid_t_indices < len(cleaned_signal))]
-                    
+             
                     st_segments = []
                     for s_idx in valid_s_indices:
                         following_t = valid_t_indices[valid_t_indices > s_idx]
                         if len(following_t) > 0:
                             st_level = np.mean(cleaned_signal[s_idx:following_t[0]])
                             st_segments.append(st_level)
-                    
+               
                     if st_segments:
                         lead_features['ST_Deviation'] = np.mean(st_segments)
                         lead_features['ST_Deviation_Std'] = np.std(st_segments) if len(st_segments) > 1 else 0
-                
+            
         # T wave morphology
         if feature_config.get('t_wave', True):
             if 'ECG_T_Peaks' in waves_info:
                 t_peaks = np.array(waves_info['ECG_T_Peaks'])
-                
+   
                 valid_t_peaks = ~np.isnan(t_peaks)
                 if np.any(valid_t_peaks):
                     valid_t_indices = t_peaks[valid_t_peaks].astype(int)
                     valid_t_indices = valid_t_indices[(valid_t_indices >= 0) & (valid_t_indices < len(cleaned_signal))]
-                    
+       
                     if len(valid_t_indices) > 0:
                         t_amplitudes = cleaned_signal[valid_t_indices]
                         lead_features['Mean_T_Amplitude'] = np.nanmean(t_amplitudes)
                         lead_features['T_Wave_Inversion_Ratio'] = np.mean(t_amplitudes < 0)
-        
+   
         # PR interval analysis
         if feature_config.get('pr_interval', True):
             if 'ECG_P_Peaks' in waves_info and 'ECG_Q_Peaks' in waves_info:
                 p_peaks = np.array(waves_info['ECG_P_Peaks'])
                 q_peaks = np.array(waves_info['ECG_Q_Peaks'])
-                
+   
                 pr_intervals = []
                 valid_p = ~np.isnan(p_peaks)
                 valid_q = ~np.isnan(q_peaks)
-                
+   
                 if np.any(valid_p) and np.any(valid_q):
                     valid_p_indices = p_peaks[valid_p].astype(int)
                     valid_q_indices = q_peaks[valid_q].astype(int)
-                    
+       
                     for p_idx in valid_p_indices:
                         following_q = valid_q_indices[valid_q_indices > p_idx]
                         if len(following_q) > 0:
                             pr_interval = (following_q[0] - p_idx) / desired_sampling_rate * 1000  # in ms
                             pr_intervals.append(pr_interval)
-                    
+       
                     if pr_intervals:
                         lead_features['Mean_PR_Interval_ms'] = np.mean(pr_intervals)
                         lead_features['Std_PR_Interval_ms'] = np.std(pr_intervals) if len(pr_intervals) > 1 else 0
-        
+   
         # QRS fragmentation detection
         if feature_config.get('qrs_fragmentation', True):
             if 'ECG_Q_Peaks' in waves_info and 'ECG_S_Peaks' in waves_info:
                 q_peaks = np.array(waves_info['ECG_Q_Peaks'])
                 s_peaks = np.array(waves_info['ECG_S_Peaks'])
-                
+   
                 fragmentation_count = 0
                 total_qrs = 0
-                
+   
                 for i in range(min(len(q_peaks), len(s_peaks))):
                     if np.isnan(q_peaks[i]) or np.isnan(s_peaks[i]):
                         continue
-                        
+           
                     qrs_start = int(q_peaks[i])
                     qrs_end = int(s_peaks[i])
-                    
+       
                     if qrs_start < qrs_end and qrs_end < len(cleaned_signal):
                         # Count direction changes within the QRS complex
                         qrs_segment = cleaned_signal[qrs_start:qrs_end]
                         if len(qrs_segment) > 2:  # Need at least 3 points to detect changes
                             direction_changes = np.sum(np.diff(np.signbit(np.diff(qrs_segment))))
-                            
+               
                             # More than 2 direction changes indicates fragmentation
                             if direction_changes > 2:
                                 fragmentation_count += 1
                             total_qrs += 1
-                
+   
                 if total_qrs > 0:
                     lead_features['QRS_Fragmentation_Ratio'] = fragmentation_count / total_qrs
 
                 # print(lead_features)
-    # print('done done')       
+    # print('done done')    
+        # print( lead_features.keys() )
     except Exception as e:
         # Detailed exception handling can be uncommented for debugging
         # print(f"Error in waveform delineation for lead {lead_idx}: {e}")
         pass
-                
+   
     return lead_idx, lead_features
 
 def process_single_record(record, desired_sampling_rate=100, train=True, feature_config=None):
@@ -905,23 +873,23 @@ def process_single_record(record, desired_sampling_rate=100, train=True, feature
     # Load signal data
     signals, fields = load_signals(record)
     original_fs = fields["fs"]
-    
+   
     # Calculate expected length once
     expected_length = int(len(signals) * desired_sampling_rate / original_fs)
-    
+   
     # Setup - feature names will be determined by the feature_config
     n_leads = signals.shape[1] if len(signals.shape) > 1 else 1
-    
+   
     # # Create a test lead to get feature names
     # test_lead_idx, test_features = process_single_lead(
     #     signals[:, 0], 0, original_fs, desired_sampling_rate, expected_length, feature_config
     # )
     # feature_names = list(test_features.keys())
-    
+   
     # Reshape if needed
     if len(signals.shape) == 1:
         signals = signals.reshape(-1, 1)
-    
+   
     # Process each lead in parallel
     process_lead = partial(
         process_single_lead,
@@ -930,12 +898,12 @@ def process_single_record(record, desired_sampling_rate=100, train=True, feature
         expected_length=expected_length,
         feature_config=feature_config
     )
-    
+   
     # Determine number of cores to use
     num_cores = min(n_leads, multiprocessing.cpu_count())
-    
-    
-    
+   
+   
+   
     with multiprocessing.Pool(processes=num_cores) as pool:
         results = pool.starmap(
             process_lead,
@@ -944,28 +912,28 @@ def process_single_record(record, desired_sampling_rate=100, train=True, feature
 
     feature_names = list( results[0][1].keys() )
 
-    
+   
     # text = " ".join(feature_names)
     # print(f"Feature names: {text}")
     # Save to a file
     # with open("featureOrder.txt", "w") as file:
     #     file.write(text)
-    
+   
     # Process leads in parallel
     features_list = [{name: np.nan for name in feature_names} for _ in range(n_leads)]
 
-    
+   
 
     # Reorganize results in correct lead order
     for lead_idx, lead_features in results:
         features_list[lead_idx] = lead_features
-        
+   
     # Convert to numpy array
     features_array = np.array([list(d.values()) for d in features_list])
 
 
     # print(f"Processed record: {record}, features shape: {features_array.shape}")
-    
+   
     # Imputation for missing features
     # if train:
     #     # Calculate median for each feature column, ignoring NaNs
@@ -974,7 +942,7 @@ def process_single_record(record, desired_sampling_rate=100, train=True, feature
 
     #     for iColumn in range( features_array.shape[1]):
     #         nan_idx = np.where( np.isnan( features_array[:, iColumn]  ) )[0]
-    #         features_array[ nan_idx, iColumn] = median_values[iColumn]  # 
+    #         features_array[ nan_idx, iColumn] = median_values[iColumn]  #
 
         # medians_by_lead = []
         # for lead_idx in range(features_array.shape[0]):
@@ -985,15 +953,15 @@ def process_single_record(record, desired_sampling_rate=100, train=True, feature
         #         if np.isnan(lead_medians[feature_name]):
         #             lead_medians[feature_name] = 0.0
         #     medians_by_lead.append(lead_medians)
-        
+   
         # # Impute missing values
         # for lead_idx in range(features_array.shape[0]):
         #     for j, feature_name in enumerate(feature_names):
         #         if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
         #             features_array[lead_idx, j] = medians_by_lead[lead_idx][feature_name]
-        
+   
         # feature_medians = medians_by_lead
-        
+   
     # elif feature_medians is not None:
     #     # Apply saved medians to test data
     #     for lead_idx in range(min(features_array.shape[0], len(feature_medians))):
@@ -1001,10 +969,10 @@ def process_single_record(record, desired_sampling_rate=100, train=True, feature
     #             if j < len(feature_names) and feature_name in feature_medians[lead_idx]:
     #                 if np.isnan(features_array[lead_idx, j]) or np.isinf(features_array[lead_idx, j]):
     #                     features_array[lead_idx, j] = feature_medians[lead_idx][feature_name]
-    
+   
     # Final safety using vectorized operation
     # features_array = np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
-    
+   
     if train:
         label = load_label(record)
         label = np.array(label).astype(np.long)
@@ -1014,13 +982,13 @@ def process_single_record(record, desired_sampling_rate=100, train=True, feature
         return record, features_array, label, source#, feature_medians
     else:
         return record, features_array
-    
+   
 
 def process_leads_in_parallel(signals, n_leads, original_fs, desired_sampling_rate, expected_length, feature_names):
     """Process all leads in parallel using CPU cores."""
     # Prepare lead data for parallel processing
     lead_signals = [signals[:, i] for i in range(n_leads)]
-    
+   
     # Create a partially bound function with fixed parameters
     process_lead = partial(
         process_single_lead,
@@ -1029,35 +997,35 @@ def process_leads_in_parallel(signals, n_leads, original_fs, desired_sampling_ra
         expected_length=expected_length,
         feature_names=feature_names
     )
-    
+   
     # Determine number of cores to use - one per lead, but limited by system cores
     num_cores = min(n_leads, multiprocessing.cpu_count())
-    
+   
     # Process leads in parallel
     features_list = [{name: np.nan for name in feature_names} for _ in range(n_leads)]
-    
+   
     with multiprocessing.Pool(processes=num_cores) as pool:
         # Map each lead to a process with its index
         results = pool.starmap(
             process_lead,
             [(lead_signals[i], i) for i in range(n_leads)]
         )
-    
+   
     # Reorganize results in correct lead order
     for lead_idx, lead_features in results:
         features_list[lead_idx] = lead_features
-        
+   
     return features_list
 
 
-def load_and_process_signal_train(records, 
+def load_and_process_signal_train(records,
                                   desired_sampling_rate=100,
                                   train=True,
                                   batch_size=5,
                                   feature_config=None):
     """
     Process multiple ECG records in parallel batches with configurable feature selection.
-    
+   
     Args:
         records: List of record paths or a single record path
         desired_sampling_rate: Target sampling rate (default: 100 Hz)
@@ -1067,7 +1035,7 @@ def load_and_process_signal_train(records,
         feature_config: Dictionary of feature groups to enable/disable:
             {
                 'basic_intervals': True,      # QRS duration, QT interval
-                'amplitude': True,            # R-peak, P-wave amplitudes
+                'amplitude': True,        # R-peak, P-wave amplitudes
                 'hrv': True,                  # Heart rate variability metrics
                 'p_wave': True,               # P wave features
                 'st_segment': True,           # ST segment analysis
@@ -1076,32 +1044,32 @@ def load_and_process_signal_train(records,
                 'qtc': True,                  # Corrected QT interval
                 'qrs_fragmentation': True     # QRS fragmentation detection
             }
-    
+   
     Returns:
         If single record and train=True: features_array, label, source, feature_medians
         If single record and train=False: features_array
         If multiple records: list of processed record results
     """
     import time
-    
+   
     # If records is a single record path, convert to list
     if isinstance(records, str):
         single_record = True
         records = [records]
     else:
         single_record = False
-    
+   
     results = []
     total_start_time = time.time()
-    
+   
     # Process records in batches
     for i in range(0, len(records), batch_size):
         batch_records = records[i:i+batch_size]
         print(f"Processing batch {i//batch_size + 1}: records {i+1} to {min(i+batch_size, len(records))}")
-        
+   
         # Start timing the batch
         batch_start_time = time.time()
-        
+   
         # Use ProcessPoolExecutor to process records in parallel
         with ProcessPoolExecutor(max_workers=batch_size) as executor:
             futures = []
@@ -1114,39 +1082,39 @@ def load_and_process_signal_train(records,
                     feature_config=feature_config
                 )
                 futures.append(future)
-            
+       
             # Collect results as they complete
             for future in as_completed(futures):
                 try:
                     record_result = future.result()
                     # print( 'record_result', record_result[-2])
-                    
+       
                     results.append(record_result)
-                    
+       
                 except Exception as e:
                     print(f"Error processing record: {e}")
-        
+   
         # End timing the batch
         batch_end_time = time.time()
         # print the shape of the features for each record in the batch
-        
+   
         # if results:
         #     print(f"Batch {i//batch_size + 1} results: {len(results)} records processed")
         #     for j, result in enumerate(results[-len(batch_records):]):
         #         record_name, features_array = result[0], result[1]
         #         print(f"Record {record_name}: features shape {features_array.shape}")
         # print(f"Batch {i//batch_size + 1} completed: Processed {len(batch_records)} records in {batch_end_time - batch_start_time:.2f} seconds")
-    
+   
     # If processing a single record, return only its results
     if single_record and results:
         # For training mode
         if  not train and len(results[0]) == 2:
             _, features_array = results[0]
             return features_array
-    
+   
     total_end_time = time.time()
     print(f"Total processing time: {total_end_time - total_start_time:.2f} seconds for {len(records)} records")
-    
+   
     return results
 
 
@@ -1185,8 +1153,8 @@ class CMLoss(nn.Module):
         """
         # 1) Convert logits to probabilities
         p = torch.softmax( logits , dim=1)         # shape (b, c)
-        
-        L = labels.float()                # shape (b, c)    
+   
+        L = labels.float()    # shape (b, c)    
 
         # # print( torch.sum(p,1) )
         # # print( p.shape, L.shape)
@@ -1205,13 +1173,13 @@ class CMLoss(nn.Module):
         # R_over_N = p / N                  # shape (b, c)
         # A = L.t() @ R_over_N              # shape (c, c)
 
-        N = L.sum(dim=0, keepdim=True) 
+        N = L.sum(dim=0, keepdim=True)
         # print(N)
         N = N.clamp(min=self.eps).expand_as(L)
         # print(N.shape)
         # print(N)
-        L_r = L / N 
-        A = L_r.t() @ p 
+        L_r = L / N
+        A = L_r.t() @ p
 
         # print(A)
 
@@ -1227,7 +1195,7 @@ def optimizer_scheduler(optimizer, initial_lr, ep):
         expo = int(ep / 30 )
         for param_group in optimizer.param_groups:
             param_group['lr'] = initial_lr * (0.1)**(expo)
-    
+   
     return optimizer
 
 
@@ -1238,7 +1206,7 @@ def train_model(data_folder, model_folder, verbose):
     """
     Train a model using the data in the data_folder and save it in the model_folder.
     Includes validation set with challenge score optimization.
-    
+   
     Args:
         data_folder: Folder containing the ECG records
         model_folder: Folder to save the trained model
@@ -1246,7 +1214,7 @@ def train_model(data_folder, model_folder, verbose):
     """
     # Find the data files
     print("New submission: Training the model...")
-    
+   
 
     scaler = StandardScaler()
     if verbose:
@@ -1265,18 +1233,18 @@ def train_model(data_folder, model_folder, verbose):
     'basic_intervals': True,   # Keep QRS, QT intervals
     'amplitude': True,         # Keep R-peak amplitudes
     'hrv': True,
-    'advance_hrv': True,               # Keep heart rate variability metrics
-    'p_wave': True,            # Keep P wave features
-    'st_segment': True,       # Disable ST segment analysis
-    't_wave': True,           # Disable T wave features
-    'pr_interval': True,      # Disable PR interval features
-    'qtc': True,              # Disable QTc features
-    'qrs_fragmentation': True, # Disable QRS fragmentation detection
-    'hrv_non_linear': True,  # Enable non-linear HRV features
-    'hrv_welch': True,  # Enable Welch's method for HRV
-   
+    'advanced_hrv': False,               # Keep heart rate variability metrics
+    'p_wave': True,        # Keep P wave features
+    'st_segment': False,       # Disable ST segment analysis
+    't_wave': False,           # Disable T wave features
+    'pr_interval': False,      # Disable PR interval features
+    'qtc': False,              # Disable QTc features
+    'qrs_fragmentation': False, # Disable QRS fragmentation detection
+    'hrv_non_linear': False,  # Enable non-linear HRV features
+    'hrv_welch': False,  # Enable Welch's method for HRV
+     
 }
-    
+   
 
     training_records = []
     print(f"Original number of records: {len(record_paths)}")
@@ -1299,12 +1267,12 @@ def train_model(data_folder, model_folder, verbose):
     # print(f"Original number of records: {len(record_paths)}")
 
     # for i, path in enumerate(record_paths):
-        
+   
     #     source = load_source(path)
     #     label = load_label(path)
 
-        
-        
+   
+   
     #     if source == 'CODE-15%' and label == 0:
     #         code15_neg_records.append(path)
     #     else:
@@ -1313,7 +1281,7 @@ def train_model(data_folder, model_folder, verbose):
     # #camilo commneted this as there are not code 15 / jul 18
     # print('negative',len(code15_neg_records))
     # sample_size = max(1, int(0.01 * len(code15_neg_records)))  
-    
+   
 
     # # random.seed(42)  
     # sampled_code15_neg = random.sample(code15_neg_records, sample_size)
@@ -1325,9 +1293,9 @@ def train_model(data_folder, model_folder, verbose):
     # print(f"Sampling ratio for CODE-15 negatives: {sample_size}/{len(code15_neg_records)} = {100*sample_size/max(1,len(code15_neg_records)):.2f}%")
 
 
-    load_features = True
+    calculate_features = False # True
 
-    if load_features:
+    if calculate_features:
         results = load_and_process_signal_train(
             record_paths, #record_paths,
             desired_sampling_rate=100,
@@ -1352,27 +1320,27 @@ def train_model(data_folder, model_folder, verbose):
         y_train = np.array(y_train)
 
 
-    
+   
         # print(f"X_train_features shape: {X_train_features.shape}")  # Should be (num_samples, 12, 6)
         # print(f"y_train shape: {y_train.shape}")
 
         # # # # # ################################################################################################
         # # # # # # Optionally save/load features to avoid reprocessing
-        #np.savez("fold_2_training_features_new_val.npz", X_train_features=X_train_features, y_train=y_train, sources=sources) 
-    
+        np.savez("fold_2_training_features_new_val_12.npz", X_train_features=X_train_features, y_train=y_train, sources=sources)
+   
     else:
-        data = np.load("fold_2_training_features_new_val.npz", allow_pickle=True)
+        data = np.load("fold_2_training_features_new_val_12.npz", allow_pickle=True)
 
         # feat_idx = [ i for i in range(len( feature_names) ) if feature_names[i] in desired_feat ]
         X_train_features = data['X_train_features']#[:, :, feat_idx]  # Ensure we only take the first 12 leads
         # print('ffff',X_train_features.shape)
-        
+   
         y_train = data['y_train']
-        
+   
         sources = data['sources']
    
 
-    # feature_names = [ 
+    # feature_names = [
     #     'Mean_QRS_Duration_ms' ,
     #     'Std_QRS_Duration_ms' ,
     #     'Mean_QT_Interval_ms' ,
@@ -1380,7 +1348,7 @@ def train_model(data_folder, model_folder, verbose):
     #     'Mean_R_Amplitude' ,
     #     'Std_R_Amplitude' ,
     #     'QRS_Net_Deflection' ,
-    #     'RR_Interval_RMSSD_ms', 
+    #     'RR_Interval_RMSSD_ms',
     #     'HRV_SD1' ,
     #     'HRV_SD2' ,
     #     'HRV_SD1SD2' ,
@@ -1438,8 +1406,8 @@ def train_model(data_folder, model_folder, verbose):
 
     # desired_feat = desired_feat[:26]
 
-    
-    
+   
+   
     ################################################################################################
     # from imblearn.over_sampling import SMOTE
 
@@ -1450,50 +1418,86 @@ def train_model(data_folder, model_folder, verbose):
     # )
 
 
-    # # Split data into train and validation sets with specific class distribution
-    # # First, separate data by class
+    # Split data into train and validation sets with specific class distribution
+    # First, separate data by class
     # class_0_indices = np.where(y_train == 0)[0]
     # class_1_indices = np.where(y_train == 1)[0]
-    
+   
     # # Determine validation set size (20% of total data)
     # val_size = int(.2 * len(y_train))
-    
+   
     # # Validation set: 95% class 0, 5% class 1
     # val_class_0_size = int(0.95 * val_size)
     # val_class_1_size = val_size - val_class_0_size
-    
+   
     # # Ensure we don't request more samples than available
     # val_class_0_size = min(val_class_0_size, len(class_0_indices))
     # val_class_1_size = min(val_class_1_size, len(class_1_indices))
 
     # # print( 'pos in validaiton', 100*val_class_1_size/(val_size) )
-    
+   
     # # Randomly select samples for validation
     # np.random.RandomState(42).shuffle(class_0_indices)
     # # np.random.shuffle(class_1_indices)
-    
+   
     # val_class_0_indices = class_0_indices[:val_class_0_size]
 
-    
+   
     # idx_eligible_pos = np.where( ( sources!='CODE-15%') &  ( y_train == 1 )  )[0]
     # np.random.RandomState(42).shuffle(idx_eligible_pos)
    
 
 
     # val_class_1_indices = idx_eligible_pos[:val_class_1_size]
-    
-    # # Combine validation indices and the remaining for training
+   
+    # # # Combine validation indices and the remaining for training
     # val_indices = np.concatenate([val_class_0_indices, val_class_1_indices])
     # train_indices = np.setdiff1d(np.arange(len(y_train)), val_indices)
-    
-    # Create train and validation sets
-    X_train = X_train_features#[train_indices]
-    y_train_split = y_train#[train_indices]
-  
+   
+    # # Create train and validation sets
+    # X_train = X_train_features[train_indices]
+    # y_train_split = y_train[train_indices]
+ 
 
     # X_val = X_train_features[val_indices]
     # y_val = y_train[val_indices]
-    
+   
+    ############################################################################
+    # Split data into train and validation sets with specific class distribution
+    # First, separate data by class
+    class_0_indices = np.where(y_train == 0)[0]
+    class_1_indices = np.where(y_train == 1)[0]
+   
+    # Determine validation set size (20% of total data)
+    val_size = int(0.2 * len(y_train))
+   
+    # Validation set: 95% class 0, 5% class 1
+    val_class_0_size = int(0.95 * val_size)
+    val_class_1_size = val_size - val_class_0_size
+   
+    # Ensure we don't request more samples than available
+    val_class_0_size = min(val_class_0_size, len(class_0_indices))
+    val_class_1_size = min(val_class_1_size, len(class_1_indices))
+   
+    # Randomly select samples for validation
+    np.random.shuffle(class_0_indices)
+    np.random.shuffle(class_1_indices)
+   
+    val_class_0_indices = class_0_indices[:val_class_0_size]
+    val_class_1_indices = class_1_indices[:val_class_1_size]
+   
+    # Combine validation indices and the remaining for training
+    val_indices = np.concatenate([val_class_0_indices, val_class_1_indices])
+    train_indices = np.setdiff1d(np.arange(len(y_train)), val_indices)
+   
+    # Create train and validation sets
+    X_train = X_train_features[train_indices]
+    y_train_split = y_train[train_indices]
+    X_val = X_train_features[val_indices]
+    y_val = y_train[val_indices]
+    ###########################################
+
+
 
     # print( 'pos in validaiton', 100*np.sum(y_val==1)/len(y_val) )
 
@@ -1501,41 +1505,42 @@ def train_model(data_folder, model_folder, verbose):
     print("Checking for and replacing infinite values...")
     # Replace inf/-inf with NaN so the imputer can handle them properly
     X_train = np.nan_to_num(X_train, nan=np.nan, posinf=np.nan, neginf=np.nan)
-    # X_val = np.nan_to_num(X_val, nan=np.nan, posinf=np.nan, neginf=np.nan)
+    X_val = np.nan_to_num(X_val, nan=np.nan, posinf=np.nan, neginf=np.nan)
 
 
 
     ### Imputation of missing values
     shape_original_train =  X_train.shape
-    # shape_original_val = X_val.shape
-    imputer = KNNImputer(n_neighbors=7)
+    shape_original_val = X_val.shape
+    # imputer = KNNImputer(n_neighbors=7)
+    imputer = SimpleImputer(missing_values=np.nan, strategy='median')
 
-    # print( X_val.shape ) 
+    # print( X_val.shape )
     X_train = imputer.fit_transform( X_train.reshape(-1, shape_original_train[1]*shape_original_train[2] ) ).reshape( shape_original_train )
 
-    # X_val = imputer.transform( X_val.reshape(-1, shape_original_val[1]*shape_original_val[2] ) ).reshape( shape_original_val )
+    X_val = imputer.transform( X_val.reshape(-1, shape_original_val[1]*shape_original_val[2] ) ).reshape( shape_original_val )
 
 
-    
+   
     print(f"Training set: {len(y_train_split)} samples ({np.sum(y_train_split == 0)} class 0, {np.sum(y_train_split == 1)} class 1)")
-    # print(f"Validation set: {len(y_val)} samples ({np.sum(y_val == 0)} class 0, {np.sum(y_val == 1)} class 1)")
+    print(f"Validation set: {len(y_val)} samples ({np.sum(y_val == 0)} class 0, {np.sum(y_val == 1)} class 1)")
 
     print(f"X_train shape: {X_train.shape}")  # Should be (num_samples, 12, 6)
-    
+   
     # Scale features - be careful to preserve the shape
     print("Starting scaling...")
     # Reshape for scaling, fitting on training data only
     original_train_shape = X_train.shape
     X_train_flat = X_train.reshape(original_train_shape[0], -1)
-    # X_val_flat = X_val.reshape(X_val.shape[0], -1)
-    
+    X_val_flat = X_val.reshape(X_val.shape[0], -1)
+   
     X_train_scaled_flat = scaler.fit_transform(X_train_flat)
-    # X_val_scaled_flat = scaler.transform(X_val_flat)
-    
+    X_val_scaled_flat = scaler.transform(X_val_flat)
+   
     # Reshape back to original dimensions
     X_train_scaled = X_train_scaled_flat.reshape(original_train_shape)
-    # X_val_scaled = X_val_scaled_flat.reshape(X_val.shape)
-    
+    X_val_scaled = X_val_scaled_flat.reshape(X_val.shape)
+   
     # check if features are nan or not
     # if np.isnan(X_train_scaled).any() or np.isnan(X_val_scaled).any():
     #     raise ValueError("NaN values found in scaled features. Check the input data and scaling process.")
@@ -1544,62 +1549,54 @@ def train_model(data_folder, model_folder, verbose):
     train_dataset = TensorDataset(
         torch.tensor(X_train_scaled, dtype=torch.float32),
         torch.tensor(y_train_split, dtype=torch.long)
-       
-        
+   
+   
     )
+
+ 
 
     val_dataset = TensorDataset(
-        torch.tensor(X_train_scaled, dtype=torch.float32),
-        torch.tensor(y_train_split, dtype=torch.long)
-      
+        torch.tensor(X_val_scaled, dtype=torch.float32),
+        torch.tensor(y_val, dtype=torch.long)
+     
     )
-
-    # val_dataset = TensorDataset(
-    #     torch.tensor(X_val_scaled, dtype=torch.float32),
-    #     torch.tensor(y_val, dtype=torch.long)
-      
-    # )
-    
-    batch_size = 256 # 32
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+   
+   
 
     # Input dimension is number of features per lead (6)
     feature_per_lead = X_train.shape[2]  # Should be 6
 
     print(f"Input dimension per lead: {feature_per_lead}")
-    
+   
     # Create model
-    model = gnn_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
+    # model = gnn_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
  
 
     # model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
 
 
-    # Class weights calculation based on training split
-    num_0s = np.sum(y_train_split == 0)
-    num_1s = np.sum(y_train_split == 1)
-    class_weights_0 = torch.tensor([1.0, num_0s/num_1s], dtype=torch.float32).to(DEVICE)
-    print(f"Class weights: {class_weights_0}")
-    
-    crossE_loss = nn.CrossEntropyLoss(class_weights_0).to(DEVICE)
-    criterion = crossE_loss.to(DEVICE)
-    
-    # focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean', 
-    #                        task_type='multi-class', num_classes=NUM_CLASSES ).to(DEVICE)
+    # # Class weights calculation based on training split
+    # num_0s = np.sum(y_train_split == 0)
+    # num_1s = np.sum(y_train_split == 1)
+    # class_weights_0 = torch.tensor([1.0, num_0s/num_1s], dtype=torch.float32).to(DEVICE)
+    # print(f"Class weights: {class_weights_0}")
+   
+    # # crossE_loss = nn.CrossEntropyLoss(class_weights_0).to(DEVICE)
+    # # criterion = crossE_loss.to(DEVICE)
+   
+    # focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean',
+    #            task_type='multi-class', num_classes=NUM_CLASSES ).to(DEVICE)
     # criterion = focal_loss.to(DEVICE)
 
-    # # Create a 2x2 weight matrix that matches the challenge metric
-    # # Example: Challenge metric values for [[TN, FP], [FN, TP]]
-    weight_matrix = torch.tensor([
-        [0.0, -2.0],  # Penalties for actual negative class (TN FP)
-        [-0.0, 0.3 ]   # Penalties for actual positive class (FN TP)
-    ], dtype=torch.float32).to(DEVICE)
+    # # # Create a 2x2 weight matrix that matches the challenge metric
+    # # # Example: Challenge metric values for [[TN, FP], [FN, TP]]
+    # weight_matrix = torch.tensor([
+    #     [0.0, -2.0],  # Penalties for actual negative class (TN FP)
+    #     [-0.0, 0.3 ]   # Penalties for actual positive class (FN TP)
+    # ], dtype=torch.float32).to(DEVICE)
 
-    # Initialize CMLoss with this weight matrix
-    cm_loss_fn = CMLoss(weight_matrix=weight_matrix).to(DEVICE)
+    # # Initialize CMLoss with this weight matrix
+    # cm_loss_fn = CMLoss(weight_matrix=weight_matrix).to(DEVICE)
 
 
     # optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE )#, weight_decay=  1e-2 )
@@ -1607,17 +1604,17 @@ def train_model(data_folder, model_folder, verbose):
                         #    momentum=0.9, weight_decay=1e-4 )#, weight_decay=  1e-2 )
 
     # total_steps = len(train_dataloader) * EPOCHS
-    # scheduler = get_cosine_schedule_with_warmup(optimizer, 
+    # scheduler = get_cosine_schedule_with_warmup(optimizer,
                                             # num_warmup_steps=EPOCHS*.1, num_training_steps=EPOCHS)
 
-    
+   
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-5)
-    
+   
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0 =2, T_mult = 2)
 
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
 
-    
+   
     # scheduler = torch.optim.lr_scheduler.OneCycleLR(
     #     optimizer,
     #     max_lr= LEARNING_RATE,
@@ -1644,248 +1641,483 @@ def train_model(data_folder, model_folder, verbose):
     best_F1 = -1.0
     patience = 50  # Number of epochs to wait for improvement
     patience_counter = 0
-    
-    
+   
+   
 
 
  
- 
-    step = 0
-
 
     # ###################################################################
+   
 
+    # EPOCHS =   150 # 300 #
+
+    LEARNING_RATE =   1e-4 # 1e-4 # 5e-4# 0.0001 *8 # # it was 0.001 for transformer
+    weight_decay= 1e-2
  
-    EPOCHS =   120
+   
 
-    # snap = np.array( [ 2,	6,	14	,30	,62,	126 ] ) -1 
-    snap = np.array( [ 30,	60, 90, 120  ] ) -1
-    # snap = np.array( [ 30,	90, 210 ] ) -1
+    # snap = np.array( [ 2,   6,    14    ,30   ,62,  126 ] ) -1
+    snap = np.array( [  30, 60, 90, 120, 150, 180, 210, 240, 270, 300  ] ) -1
+    # snap = np.array( [ 30,  70, 150, 310  ] ) -1
+   
+    # snap = np.array( [ 30,  90, 210 ] ) -1
 
-    snapshots = []
-
+   
     # optimizer = optim.SGD(model.parameters(), lr=1e-2, weight_decay=1e-4 )
 
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-1 )
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 
-                                                                    #  T_0 =30, T_mult = 1)
-    
-    def exp_warm_restart(epoch, T_0=30):
-        # epoch % T_0 gives you position in current cycle
-        cycle_epoch = epoch % T_0
-        gamma = 0.1
-        return gamma ** (cycle_epoch / T_0) # 1.0 - (cycle_epoch / T_0)  # linear decay from 1.0 → 0.0
+    batch_size = 256 # 32
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, 
-                                                  lr_lambda=lambda epoch: exp_warm_restart(epoch, T_0=30))
-    
-    
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, 
-    #                                                                  T_0 =30, T_mult = 2)
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    
-    for epoch in range( EPOCHS):
-        print(f'Epoch {epoch+1}/{EPOCHS}')
+    # Class weights calculation based on training split
+    num_0s = np.sum(y_train_split == 0)
+    num_1s = np.sum(y_train_split == 1)
+    class_weights_0 = torch.tensor([1.0, num_0s/num_1s],
+                                    dtype=torch.float32).to(DEVICE)
+    print(f"Class weights: {class_weights_0}")
+   
+    crossE_loss = nn.CrossEntropyLoss(class_weights_0).to(DEVICE)
+    criterion_CE = crossE_loss.to(DEVICE)
+   
+    focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean',
+                        task_type='multi-class', num_classes=NUM_CLASSES ).to(DEVICE)
+    criterion = focal_loss.to(DEVICE)
 
-        
-        # Training phase
-        model.train()
-        epoch_loss = 0.0
-        all_train_predictions = []
-        all_train_labels = []
-      
-        
-        for batch_features, batch_labels in train_dataloader:
+    # # Create a 2x2 weight matrix that matches the challenge metric
+    # # Example: Challenge metric values for [[TN, FP], [FN, TP]]
+    weight_matrix = torch.tensor([
+        [0.0, -2.0],  # Penalties for actual negative class (TN FP)
+        [-0.0, 0.3 ]   # Penalties for actual positive class (FN TP)
+    ], dtype=torch.float32).to(DEVICE)
 
-            #p  =  torch.tensor( step / (EPOCHS* len(train_dataloader) ) , dtype=torch.float32, device=DEVICE)
+    # Initialize CMLoss with this weight matrix
+    cm_loss_fn = CMLoss(weight_matrix=weight_matrix).to(DEVICE)
+   
+    reps = 3
+
+    # snapshots_global = []
+    # snapshot_scores_global = []
+    for rep in range(reps):
+
+        lossTurn =   False
+
+        snapshots = []
+        snapshot_scores = []
+
+   
+
+        print(f'Repetition {rep}')
+
+   
+   
+
+        if rep == 0:
+            # do cnn
+            model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
             
-            # alpha_epoch =   max_alpha * (2.0 / (1.0 + torch.exp(-10 * p)) - 1.0)
-            # optimizer = optimizer_scheduler(optimizer, LEARNING_RATE, p)
-            # step += 1
+            EPOCHS =   180
+            snap = np.array( [  30, 60, 90, 120, 150, 180, 210, 240, 270, 300  ] ) -1
 
-
-
-            batch_features = batch_features.to(DEVICE)
-            batch_labels = batch_labels.to(DEVICE)
+            optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay )
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
+                                                                        T_0 =30, T_mult = 1 )
             
-            
-            optimizer.zero_grad()
-
-    
-            outputs  = model(batch_features  )
-            probabilities = F.softmax(outputs, dim=1)
-                
-            # print( batch_labels_all.shape, logits_all.shape )
-            
-            # f_loss = criterion(outputs, batch_labels)
-            
-            # scores = F.softmax(outputs, dim=1)[:, 1] 
-            # # Compute ranking hinge loss
-            # ranking_loss = ranking_hinge_loss(scores, batch_labels, margin=2.0, num_pairs=10000)
-
-            all_train_labels.extend(batch_labels.cpu().numpy())
-
-            one_hot_labels = F.one_hot(batch_labels, num_classes=NUM_CLASSES).float()
-            cm_loss = cm_loss_fn(outputs, one_hot_labels)  # Pass one-hot labels instead of class indices
-
-
-            loss =   cm_loss # f_loss + ( ranking_loss)
-
-
-            loss.backward()
-            optimizer.step()
+            model_name = "CNN"
+            print('Model CNN')
+        elif rep == 1:
+            # do gnn
+            model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
+       
            
-            
-            epoch_loss += loss.item() * batch_features.size(0)
-            
- 
-            
-            predicted = torch.argmax(probabilities, dim=1)
+            EPOCHS =   310
+            snap = np.array( [ 30, 70, 150, 310  ] ) -1
 
-            all_train_predictions.extend(predicted.cpu().numpy())
+            optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay )
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
+                                                                        T_0 =10, T_mult = 2 )
             
+            model_name = "GNN"
+            print('Model GNN')
+        elif rep == 2:
+            #do transformer
+            model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
+       
+
+            EPOCHS =   126 # 254
+            snap = np.array( [ 30, 62, 126, 254  ] ) -1
+
+            optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay )
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
+                                                                        T_0 =2, T_mult = 2 )
+            
+            model_name = "Transformer"
+            print('Model transfomer')
+
+   
+        # optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay )
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
+                                                                        #  T_0 =30, T_mult = 1)
+   
+   
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
+        #                                                                 T_0 =30, T_mult = 1 )
+
+   
+        for epoch in range( EPOCHS):
+            print(f'Epoch {epoch+1}/{EPOCHS}')
 
        
-        # Compute training metrics
-        epoch_loss /= len(train_dataset)
-        train_accuracy = (torch.tensor(all_train_predictions) == torch.tensor(all_train_labels)).sum().item() / len(all_train_labels)
-        train_f1 = f1_score(all_train_labels, all_train_predictions )
+            # Training phase
+            model.train()
+            epoch_loss = 0.0
+            all_train_predictions = []
+            all_train_labels = []
+   
+       
+            for batch_features, batch_labels in train_dataloader:
 
-        
 
-        for i, pg in enumerate(optimizer.param_groups):
-            lr = pg['lr']
+                batch_features = batch_features.to(DEVICE)
+                batch_labels = batch_labels.to(DEVICE)
+   
+   
+                optimizer.zero_grad()
 
-        print(f'current learning rate :{lr}')
+   
+                outputs  = model(batch_features  )
+                probabilities = F.softmax(outputs, dim=1)
+       
+                # print( batch_labels_all.shape, logits_all.shape )
+   
+                all_train_labels.extend(batch_labels.cpu().numpy())
 
-        scheduler.step()  # Update learning rate after each epoch
-        
-        
-        print(f'Training - Loss: {epoch_loss:.4f}, Accuracy: {train_accuracy:.4f}, F1 Score: {train_f1:.4f}   ')
-              
-              #, Domain Score: {domainSource:.4f} target: {domainTarget:.4f}')
-        
+                if lossTurn:
+                    # f_loss = criterion_CE(outputs, batch_labels) #
+                    f_loss = criterion(outputs, batch_labels)
+   
+                    scores = F.softmax(outputs, dim=1)[:, 1]
+                    # Compute ranking hinge loss
+                    ranking_loss = ranking_hinge_loss(scores, batch_labels, margin=2.0, num_pairs=10000)
+
+                    loss =    f_loss + ( ranking_loss)
+
+                else:
+
+                    one_hot_labels = F.one_hot(batch_labels, num_classes=NUM_CLASSES).float()
+                    cm_loss = cm_loss_fn(outputs, one_hot_labels)  # Pass one-hot labels instead of class indices
+
+
+                    loss =   cm_loss
+
+
+                loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+
+                optimizer.step()
+       
+   
+                epoch_loss += loss.item() * batch_features.size(0)
+   
+   
+                predicted = torch.argmax( probabilities, dim=1)
+
+                all_train_predictions.extend( predicted.cpu().numpy())
+   
+
+   
+            # Compute training metrics
+            epoch_loss /= len(train_dataset)
+            train_accuracy = (torch.tensor(all_train_predictions) == torch.tensor(all_train_labels)).sum().item() / len(all_train_labels)
+            train_f1 = f1_score(all_train_labels, all_train_predictions )
+
+       
+
+            for i, pg in enumerate(optimizer.param_groups):
+                lr = pg['lr']
+
+            print(f'current learning rate :{lr}')
+
+            scheduler.step()  # Update learning rate after each epoch
+       
+       
+            print(f'Training - Loss: {epoch_loss:.4f}, Accuracy: {train_accuracy:.4f}, F1 Score: {train_f1:.4f}   ')
+   
+                #, Domain Score: {domainSource:.4f} target: {domainTarget:.4f}')
+       
+            # Validation phase
+            model.eval()
+            val_predictions = []
+            val_probabilities = []
+            val_ground_truth = []
+       
+            with torch.no_grad():
+                for batch_features, batch_labels in val_dataloader:
+                    batch_features = batch_features.to(DEVICE)
+                    batch_labels = batch_labels.to(DEVICE)
+   
+       
+                    outputs  = model( batch_features )
+
+                    # outputs, _ = model(batch_features, 0.0 )
+                    probabilities =  F.softmax(outputs, dim=1)
+       
+                    predicted = torch.argmax(probabilities, dim=1)
+                    # _, predicted = torch.max(outputs, 1)
+       
+                    val_predictions.extend(predicted.cpu().numpy())
+                    val_probabilities.extend(probabilities[:, 1].cpu().numpy())  # Probability for positive class
+                    val_ground_truth.extend(batch_labels.cpu().numpy())
+       
+            # Compute validation metrics
+            val_accuracy = (torch.tensor(val_predictions) == torch.tensor(val_ground_truth)).sum().item() / len(val_ground_truth)
+            val_f1 = f1_score(val_ground_truth, val_predictions )
+       
+            # Calculate challenge score on validation set
+            # Use fewer permutations during training for speed
+
+            print(f'Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}' ) #, Challenge Score: {val_challenge_score:.4f}')
+
+            if epoch in snap:
+                val_challenge_score = compute_challenge_score(
+                    val_ground_truth,
+                    val_probabilities,
+                    num_permutations=10**4  # Reduced from 10^4 for faster computation during training
+                )
+
+                snapshot_scores.append( val_challenge_score )
+   
+   
+                # save weights
+                snapshot = {k: v.clone() for k, v in model.state_dict().items()}
+                snapshots.append( (epoch, snapshot) )
+
+                # snapshots_global.append( (rep, epoch, snapshot.copy()) )
+                # snapshot_scores_global.append( val_challenge_score.copy() )
+
+                #change loss for next model
+                # if epoch == 59:
+                #     lossTurn = not lossTurn
+                lossTurn = not lossTurn
+
+       
+        del optimizer, scheduler    
+
+        # after all
+        _, first_weights = snapshots[0]
+        avg_weights = {k: v.clone() for k, v in first_weights.items()}
+        for v in avg_weights.values():
+            v.zero_()
+
+        num_snapshots = len(snapshots)
+
+        idx_model = 0
+        for _, state_dict in snapshots:
+            for k, v in state_dict.items():
+       
+            # temp = v.clone().float()*snapshot_scores[idx_model]
+                # print( v.dtype, snapshot_scores[idx_model].dtype, temp.dtype )
+                # avg_weights[k] += temp.to( v.dtype)
+                avg_weights[k] = avg_weights[k] + v*snapshot_scores[idx_model]
+                # print( v.dtype, avg_weights[k].dtype )
+            idx_model += 1
+
+        print(f'scores :{snapshot_scores}')
+        snapshot_scores = np.array(snapshot_scores)
+        totalWeight = np.sum( snapshot_scores )
+
+   
+        for v in avg_weights.values():
+            v = v / totalWeight # num_snapshots
+
+
+   
+        model.load_state_dict(avg_weights)
+   
+        print("after averaging")
+
+        # # Save the model
+   
         # Validation phase
         model.eval()
         val_predictions = []
         val_probabilities = []
         val_ground_truth = []
-        
+   
         with torch.no_grad():
             for batch_features, batch_labels in val_dataloader:
                 batch_features = batch_features.to(DEVICE)
                 batch_labels = batch_labels.to(DEVICE)
-              
-                
+   
+   
                 outputs  = model( batch_features )
 
                 # outputs, _ = model(batch_features, 0.0 )
                 probabilities =  F.softmax(outputs, dim=1)
-                
+   
                 predicted = torch.argmax(probabilities, dim=1)
                 # _, predicted = torch.max(outputs, 1)
-                
+   
                 val_predictions.extend(predicted.cpu().numpy())
                 val_probabilities.extend(probabilities[:, 1].cpu().numpy())  # Probability for positive class
                 val_ground_truth.extend(batch_labels.cpu().numpy())
-        
+   
         # Compute validation metrics
         val_accuracy = (torch.tensor(val_predictions) == torch.tensor(val_ground_truth)).sum().item() / len(val_ground_truth)
         val_f1 = f1_score(val_ground_truth, val_predictions )
-        
-        # # Calculate challenge score on validation set
-        # # Use fewer permutations during training for speed
-        # val_challenge_score = compute_challenge_score(
-        #     val_ground_truth, 
-        #     val_probabilities,
-        #     num_permutations=10**4  # Reduced from 10^4 for faster computation during training
-        # )
+   
+        # Calculate challenge score on validation set
+        # Use fewer permutations during training for speed
+        val_challenge_score = compute_challenge_score(
+            val_ground_truth,
+            val_probabilities,
+            num_permutations=10**4  # Reduced from 10^4 for faster computation during training
+        )
 
-        
-        print(f'Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}' ) #, Challenge Score: {val_challenge_score:.4f}')
-        
+   
+        save_model(model_folder, model, scaler, imputer, val_challenge_score, model_name=model_name )
+   
+   
+        print(f'Final Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}, Challenge Score: {val_challenge_score:.4f}')
+   
+        del model
 
-        if epoch in snap:
-            # save weights
-            snapshot = {k: v.clone() for k, v in model.state_dict().items()}
-            snapshots.append( (epoch, snapshot) )
+    # pred_snaps = np.concatenate( pred_snaps, axis=0)
+    # pred_snaps = np.mean( pred_snaps, axis=0)
 
-        # if (val_challenge_score > best_challenge_score)  :
-        #     best_challenge_score = val_challenge_score
-          
-        #     print(f"New best challenge score: {best_challenge_score:.4f} ")
-
-        # print(f"Best validation challenge score so far: {best_challenge_score:.4f}")
-            
-
-
-    _, first_weights = snapshots[0]
-    avg_weights = {k: v.clone() for k, v in first_weights.items()}
-    for v in avg_weights.values():
-        v.zero_()
-
-    num_snapshots = len(snapshots)
-
-    for _, state_dict in snapshots:
-        for k, v in state_dict.items():
-            avg_weights[k] += v
-
-    for v in avg_weights.values():
-        v /= num_snapshots
-
-    # Load averaged weights
-    model.load_state_dict(avg_weights)
-
-    # Save the model
-    os.makedirs(model_folder, exist_ok=True)    
-    save_model(model_folder, model, scaler, imputer )
-
-
-    del model
-
-    print("after averaging")
     model = load_model(model_folder, verbose)
 
+    m1 = model[0]
+    m2 = model[1]
+    m3 = model[2]
 
-    # Validation phase
-    model.eval()
+    score1 = m1.val_challenge_score
+    score2 = m2.val_challenge_score
+    score3 = m3.val_challenge_score
+
+
+    weights = score1+score2+score3
+
+    score1 /= weights
+    score2 /= weights
+    score3 /= weights
+
+    score1 = torch.from_numpy(score1)
+    score2 = torch.from_numpy(score2)
+    score3 = torch.from_numpy(score3)
+
+    print( score1, score2, score3 )
+   
+
+    m1.eval()
+    m2.eval()
+    m3.eval()
+
+    del avg_weights
+
+    # after all
+    # print(f'scores global:{snapshot_scores_global}')
+    # snapshots_global = snapshots_global#[:7]
+    # snapshot_scores_global = snapshot_scores_global#[:7]
+
+    # _, _, first_weights = snapshots_global[0]
+    # avg_weights = {k: v.clone() for k, v in first_weights.items()}
+    # for v in avg_weights.values():
+    #     v.zero_()
+
+  
+    # idx_model = 0
+    # for _, _, state_dict in snapshots_global:
+    #     for k, v in state_dict.items():
+    #         avg_weights[k] = avg_weights[k] + v*snapshot_scores_global[idx_model]
+    #     idx_model += 1
+
+    
+    # snapshot_scores_global = np.array(snapshot_scores_global)
+    # totalWeight = np.sum( snapshot_scores_global )
+    # print(f'scores totalWeight:{totalWeight}')
+
+    # for v in avg_weights.values():
+    #     v = v / totalWeight
+    #     # print( v )
+
+
+    # model2 = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
+    # model2.load_state_dict(avg_weights)
+    # model2.eval()
+
     val_predictions = []
     val_probabilities = []
     val_ground_truth = []
-    
+    # val_probabilities_g = []
+   
     with torch.no_grad():
         for batch_features, batch_labels in val_dataloader:
             batch_features = batch_features.to(DEVICE)
             batch_labels = batch_labels.to(DEVICE)
-            
-            
-            outputs  = model( batch_features )
+       
+       
+            outputs1  = m1( batch_features )
+            outputs2  = m2( batch_features )
+            outputs3  = m3( batch_features )
+
+            # outputs_g = model2( batch_features )
 
             # outputs, _ = model(batch_features, 0.0 )
-            probabilities =  F.softmax(outputs, dim=1)
-            
-            predicted = torch.argmax(probabilities, dim=1)
-            # _, predicted = torch.max(outputs, 1)
-            
-            val_predictions.extend(predicted.cpu().numpy())
-            val_probabilities.extend(probabilities[:, 1].cpu().numpy())  # Probability for positive class
+            probabilities1 =  F.softmax(outputs1, dim=1)
+            probabilities2 =  F.softmax(outputs2, dim=1)
+            probabilities3 =  F.softmax(outputs3, dim=1)
+
+            # probabilities_g =  F.softmax(outputs_g, dim=1)
+       
+       
+            probabilities = score1*probabilities1[:,1] + score2*probabilities2[:,1] + score3*probabilities3[:,1]
+       
+            val_probabilities.extend(probabilities.cpu().numpy())  # Probability for positive class
             val_ground_truth.extend(batch_labels.cpu().numpy())
-    
+
+            # val_probabilities_g.extend(probabilities_g[:,1].cpu().numpy())  
+   
     # Compute validation metrics
-    val_accuracy = (torch.tensor(val_predictions) == torch.tensor(val_ground_truth)).sum().item() / len(val_ground_truth)
-    val_f1 = f1_score(val_ground_truth, val_predictions )
-    
+   
     # Calculate challenge score on validation set
     # Use fewer permutations during training for speed
     val_challenge_score = compute_challenge_score(
-        val_ground_truth, 
+        val_ground_truth,
         val_probabilities,
         num_permutations=10**4  # Reduced from 10^4 for faster computation during training
     )
-
+    if val_challenge_score < 0.3:
+        print("Warning: Best validation challenge score is below 0.3, indicating poor model performance.")
+        print(f"Best challenge score achieved: {val_challenge_score:.4f}")
+        raise ValueError("Model training did not achieve a satisfactory challenge score.")
     
-    print(f'Final Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}, Challenge Score: {val_challenge_score:.4f}')
-        
+
+    print(f'Final Validation -  Challenge Score: {val_challenge_score:.4f}')
+
+    # val_challenge_score = compute_challenge_score(
+    #     val_ground_truth,
+    #     val_probabilities_g,
+    #     num_permutations=10**4  # Reduced from 10^4 for faster computation during training
+    # )
+
+    # print(f'Global Final Validation -  Challenge Score: {val_challenge_score:.4f}')
+   
+   
+   
+
+
+    # val_challenge_score = compute_challenge_score(
+    #     val_ground_truth,
+    #     pred_snaps,
+    #     num_permutations=10**4  # Reduced from 10^4 for faster computation during training
+    # )
+   
+    # print(f'average Challenge Score: {val_challenge_score:.4f}')
 
 
 
@@ -1895,14 +2127,14 @@ def train_model(data_folder, model_folder, verbose):
         #     best_F1 = val_f1
         #     patience_counter = 0
         #     print(f"New best challenge score: {best_challenge_score:.4f}, saving model...")
-            
+       
         #     # Save the model
         #     os.makedirs(model_folder, exist_ok=True)    
         #     save_model(model_folder, model, scaler, imputer )
         # else:
         #     patience_counter += 1
         #     print(f"Challenge score did not improve. Patience: {patience_counter}/{patience}")
-            
+       
         #     if patience_counter >= patience:
         #         print(f"Early stopping after {patience} epochs without improvement")
         #         break
@@ -1912,7 +2144,7 @@ def train_model(data_folder, model_folder, verbose):
         #     print("Last batch details:")
         #     print(f"  - Focal loss: {f_loss.item() if not torch.isnan(f_loss) else 'NaN'}")
         #     print(f"  - Ranking loss: {ranking_loss.item() if not torch.isnan(ranking_loss) else 'NaN'}")
-            
+       
         #     # If we have a good model already, just use it
         #     if best_challenge_score > 0.3:
         #         print(f"Using previously saved model with score: {best_challenge_score:.4f}")
@@ -1922,12 +2154,9 @@ def train_model(data_folder, model_folder, verbose):
         #         print(f"No good model found yet (best: {best_challenge_score:.4f}). Training is unstable.")
         #         print("Restarting from the latest checkpoint with lower learning rate might help.")
         #         break  # It's usually better to break and restart with different settings
-  
-    # if best_challenge_score < 0.3:
-    #     print("Warning: Best validation challenge score is below 0.3, indicating poor model performance.")
-    #     print(f"Best challenge score achieved: {best_challenge_score:.4f}")
-    #     raise ValueError("Model training did not achieve a satisfactory challenge score.")
+ 
     
+   
     #print(f"Training complete. Best validation challenge score: {best_challenge_score:.4f}")
 
     # file_name = "val_score.txt"
@@ -1935,7 +2164,7 @@ def train_model(data_folder, model_folder, verbose):
 
     # with open(file_name, "w") as file:
     #     file.write(content)
-    
+   
     if verbose:
         print('Done.')
         print()
@@ -1943,122 +2172,211 @@ def train_model(data_folder, model_folder, verbose):
 def run_model(record, model, verbose):
     """
     Run a trained model on a record.
-    
+   
     Args:
         record: Path to the record
         model: Trained model
         verbose: Whether to print progress
-    
+   
     Returns:
         (binary_output, probability_output): Prediction and probability
     """
     if verbose:
         print(f'Processing record {record} for prediction...')
-    
+   
     # Extract features from the record
     features_array = load_and_process_signal_train(
-        record, 
+        record,
         desired_sampling_rate=100,
         train=False
     )
-    
+   
     # Apply scaling
     original_shape = features_array.shape
     features_flat = features_array.reshape(1, -1)  # Flatten for scaling
     features_flat = np.nan_to_num(features_flat, nan=np.nan, posinf=np.nan, neginf=np.nan)
-    features_imputed = model.imputer.transform(features_flat)
-    features_scaled = model.feature_scaler.transform(features_imputed)
+
+    m1 = model[0]
+    m2 = model[1]
+    m3 = model[2]
+
+    score1 = m1.val_challenge_score
+    score2 = m2.val_challenge_score
+    score3 = m3.val_challenge_score
+
+
+    weights = score1+score2+score3
+
+    score1 /= weights
+    score2 /= weights
+    score3 /= weights
+
+    score1 = torch.from_numpy(score1)
+    score2 = torch.from_numpy(score2)
+    score3 = torch.from_numpy(score3)
+
+    features_imputed = m1.imputer.transform(features_flat)
+    features_scaled = m1.feature_scaler.transform(features_imputed)
+
     features_scaled = features_scaled.reshape(original_shape)  # Reshape back to (12, 6)
-    
+   
     # Convert to tensor and send to device
     features_tensor = torch.tensor(features_scaled, dtype=torch.float32).unsqueeze(0).to(DEVICE)
     # features_tensor shape: (1, 12, 6) - batch_size, num_leads, num_features
-    
+   
     # Run prediction
     with torch.no_grad():
-        logits = model(features_tensor)
-        probs = F.softmax(logits, dim=1).cpu().numpy()
+        # logits = model(features_tensor)
+
+        outputs1  = m1( features_tensor )
+        outputs2  = m2( features_tensor )
+        outputs3  = m3( features_tensor )
+
+        # outputs, _ = model(batch_features, 0.0 )
+        probabilities1 =  F.softmax(outputs1, dim=1)
+        probabilities2 =  F.softmax(outputs2, dim=1)
+        probabilities3 =  F.softmax(outputs3, dim=1)
+   
+   
+        probs = score1*probabilities1 + score2*probabilities2 + score3*probabilities3
+   
+        # print(probs)
+
+   
         pred_class = int(np.argmax(probs))
-    
+
+        # print(pred_class)
+   
     binary_output = bool(pred_class)
     probability_output = float(probs[0, 1])  # Probability for the positive class
-    
+   
     if verbose:
         print(f'Prediction: {binary_output}, Probability: {probability_output:.4f}')
-    
+   
     return binary_output, probability_output
 
 def load_model(model_folder, verbose):
     """
     Load a trained model from a folder.
-    
+   
     Args:
         model_folder: Folder containing the saved model
         verbose: Whether to print progress
-    
+   
     Returns:
         model: Loaded model
     """
     if verbose:
         print('Loading model and features preprocessing components...')
-    
+   
     # Load the PyTorch model
-    model_path = os.path.join(model_folder, 'model.pth')
-    if not os.path.exists(model_path):
-        model_path = os.path.join(model_folder, 'transformer_model.pt')  # Try alternative name
-    
+    model_path_cnn = os.path.join(model_folder, 'CNN.pth')
+    model_path_gnn = os.path.join(model_folder, 'GNN.pth')
+    model_path_transformer = os.path.join(model_folder, 'Transformer.pth')
+
+   
+
+    # if not os.path.exists(model_path):
+    #     model_path = os.path.join(model_folder, 'transformer_model.pt')  # Try alternative name
+   
     # Load feature scaler
     feature_scaler_path = os.path.join(model_folder, 'feature_scaler.joblib')
     feature_scaler = joblib.load(feature_scaler_path)
-    
+   
     # Load feature medians for imputation
     imputer_path = os.path.join(model_folder, 'imputer.pkl')
     with open(imputer_path, 'rb') as f:
         imputer = pickle.load(f)
-    
-    
+   
+   
     # Create and load model
-    model = gnn_model(input_dim=30, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
-    # model = conv_model(input_dim=30, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
-    
-    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
-    model.eval()
-    # Store preprocessing components with the model
-    model.feature_scaler = feature_scaler
-    model.imputer = imputer
-    
+    # model = gnn_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
+    model_1 = conv_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
+    # model_2 = gnn_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
+    # model_3 = transformer(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
+
+    model_2 = conv_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
+    model_3 = conv_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
+
+    model_1.load_state_dict(torch.load(model_path_cnn, map_location=DEVICE))
+    model_2.load_state_dict(torch.load(model_path_gnn, map_location=DEVICE))
+    model_3.load_state_dict(torch.load(model_path_transformer, map_location=DEVICE))
+   
+    model_1.eval()
+    model_2.eval()
+    model_3.eval()
+
+    val_score1 = np.load(f'{model_folder}/CNN_scores.npz') ["score"]
+    val_score2 = np.load(f'{model_folder}/GNN_scores.npz') ["score"]
+    val_score3 = np.load(f'{model_folder}/Transformer_scores.npz') ["score"]
+
+   
+    feature_scaler_path = os.path.join(model_folder, 'feature_scaler.joblib')
+    scaler = joblib.load(feature_scaler_path)
+
+    imputer_path = os.path.join(model_folder, 'imputer.pkl')
+    with open(imputer_path, 'rb') as f:
+        imputer = pickle.load(f)
+
+
+
+    # checkpoint1 = torch.load(model_path_cnn, map_location=DEVICE)
+    # checkpoint2 = torch.load(model_path_gnn, map_location=DEVICE)
+    # checkpoint3 = torch.load(model_path_transformer, map_location=DEVICE)
+
+    # print( checkpoint1.keys() )
+    # # 5) Get your stored validation score
+    # val_score1 = checkpoint1.get("val_challenge_score", None) #["val_challenge_score"]
+    # val_score2 = checkpoint2.get("val_challenge_score", None) #["val_challenge_score"]
+    # val_score3 = checkpoint3.get("val_challenge_score", None) #["val_challenge_score"]
+
+    print( val_score1, val_score2, val_score3 )
+    # # 4) Restore your pre‐/post‐processors
+    # scaler  = checkpoint1.get("scaler", None)
+    # imputer = checkpoint1.get("imputer", None)
+
+   
+
+   
+    model_1.imputer = imputer
+    model_1.feature_scaler = scaler
+
+    model_1.val_challenge_score = val_score1
+    model_2.val_challenge_score = val_score2
+    model_3.val_challenge_score = val_score3
+
+   
+    model = [model_1, model_2, model_3]
     if verbose:
         print('Model loaded successfully.')
     return model
 
-def save_model(model_folder, model, scaler, imputer ):
-    """
-    Save model and related components to the model folder.
-    
-    Args:
-        model_folder: Directory to save the model
-        model: PyTorch model
-        scaler: Feature scaler
-        feature_medians: Median values for feature imputation
-    """
+def save_model(model_folder, model, scaler, imputer, val_challenge_score, model_name ):
     # Create directory if it doesn't exist
     os.makedirs(model_folder, exist_ok=True)
-    
+   
     # 1. Save the PyTorch model separately
-    torch.save(model.state_dict(), os.path.join(model_folder, 'model.pth'))
-    
-    # 2. Save the scaler using joblib (better for scikit-learn objects)
+    torch.save(model.state_dict(), os.path.join(model_folder, f'{model_name}.pth'))
+   
+    # # 2. Save the scaler using joblib (better for scikit-learn objects)
     joblib.dump(scaler, os.path.join(model_folder, 'feature_scaler.joblib'))
-    
+   
     # 3. Save feature medians using pickle
     with open(os.path.join(model_folder, 'imputer.pkl'), 'wb') as f:
         pickle.dump(imputer, f)
-    
+   
     # 4. Also save a combined checkpoint for backward compatibility
     torch.save({
         'model_state_dict': model.state_dict(),
-        'scaler': scaler,
-        'imputer': imputer
-    }, os.path.join(model_folder, 'transformer_model.pt'))
-    
-    print(f"Model and components saved to {model_folder}")
+     
+    }, os.path.join(model_folder, f'{model_name}.pt'))
+
+    #    'scaler': scaler,
+    #     'imputer': imputer,
+    #     'val_challenge_score': val_challenge_score
+   
+
+    np.savez(os.path.join(model_folder, f'{model_name}_scores.npz'), score = val_challenge_score)
+
+   
+    # print(f"Model and components saved to {model_folder}")
