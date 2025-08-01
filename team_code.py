@@ -1326,7 +1326,7 @@ def train_model(data_folder, model_folder, verbose):
 
         # # # # # ################################################################################################
         # # # # # # Optionally save/load features to avoid reprocessing
-        np.savez("fold_2_training_features_new_val_12.npz", X_train_features=X_train_features, y_train=y_train, sources=sources)
+        # np.savez("fold_2_training_features_new_val_12.npz", X_train_features=X_train_features, y_train=y_train, sources=sources)
    
     else:
         data = np.load("fold_2_training_features_new_val_12.npz", allow_pickle=True)
