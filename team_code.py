@@ -39,7 +39,10 @@ import neurokit2 as nk
 from helper_code import load_signals, load_label, load_header, get_source
 from transformers import get_cosine_schedule_with_warmup
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.impute import KNNImputer, SimpleImputer
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import KNNImputer, SimpleImputer, IterativeImputer
+
+from torch.optim.lr_scheduler import OneCycleLR
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -150,14 +153,10 @@ def ranking_hinge_loss(scores, target, margin=1.0, num_pairs=1000):
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-SPATIAL_INPUT_DIM = 10
-TEMPORAL_INPUT_DIM = 120
-N_HEADS = 1
-N_LAYERS = 1
+LEARNING_RATE = 0.0001
 DROPOUT = 0.2
 NUM_CLASSES = 2  
-
+EPOCHS = 300
 
 def filter_data(signal, lowcut=0.5, highcut=40.0, fs=250.0, order=5):
     nyquist = 0.5 * fs
@@ -168,211 +167,211 @@ def filter_data(signal, lowcut=0.5, highcut=40.0, fs=250.0, order=5):
     return y
 
 
-class gnn_model(nn.Module):
-    def __init__(self, input_dim=30, num_leads=12, num_classes=2):
-        super(gnn_model, self).__init__()
+# class gnn_model(nn.Module):
+#     def __init__(self, input_dim=30, num_leads=12, num_classes=2):
+#         super(gnn_model, self).__init__()
 
-        # temp = input_dim
-        # input_dim = num_leads
-        # num_leads = temp
+#         # temp = input_dim
+#         # input_dim = num_leads
+#         # num_leads = temp
 
-        self.input_dim = input_dim
-        self.num_leads = num_leads
-        self.num_classes = num_classes
+#         self.input_dim = input_dim
+#         self.num_leads = num_leads
+#         self.num_classes = num_classes
 
-        self.adj_linear = nn.Parameter(torch.rand(num_leads, input_dim), requires_grad=True)
+#         self.adj_linear = nn.Parameter(torch.rand(num_leads, input_dim), requires_grad=True)
    
-        self.activation = nn.SELU() # nn.LeakyReLU() #  nn.GELU() #  nn.GELU() # nn.LeakyReLU() #
-        #make conv1 as a sequential layer
-        expand = input_dim*10
-        self.gnn1 = nn.Sequential( nn.Linear(input_dim, expand  ),
+#         self.activation = nn.SELU() # nn.LeakyReLU() #  nn.GELU() #  nn.GELU() # nn.LeakyReLU() #
+#         #make conv1 as a sequential layer
+#         expand = input_dim*10
+#         self.gnn1 = nn.Sequential( nn.Linear(input_dim, expand  ),
                    
-            self.activation,
-              nn.LayerNorm(  expand ),
-              nn.Dropout(0.2)
+#             self.activation,
+#               nn.LayerNorm(  expand ),
+#               nn.Dropout(0.2)
      
-        )
+#         )
 
-        # self.cnn = conv_model( input_dim=expand, num_leads=num_leads, num_classes=num_classes)
+#         # self.cnn = conv_model( input_dim=expand, num_leads=num_leads, num_classes=num_classes)
 
-        # self.gnn2 = nn.Sequential( nn.Linear(expand, expand  ),
-        #                         self.activation,
-        #       nn.LayerNorm(  expand ),
-        #       nn.Dropout(0.2)
+#         # self.gnn2 = nn.Sequential( nn.Linear(expand, expand  ),
+#         #                         self.activation,
+#         #       nn.LayerNorm(  expand ),
+#         #       nn.Dropout(0.2)
      
-        # )
+#         # )
 
-        # self.linear1 = nn.Sequential( nn.Linear(expand, expand,  ),
-        #                              nn.LayerNorm(expand),
-        #     self.activation,
-        #     nn.Dropout(0.2)
+#         # self.linear1 = nn.Sequential( nn.Linear(expand, expand,  ),
+#         #                              nn.LayerNorm(expand),
+#         #     self.activation,
+#         #     nn.Dropout(0.2)
      
-        # )
+#         # )
 
-        # self.linear2 = nn.Sequential(   nn.Linear(expand , expand,  ),
-        #                              nn.LayerNorm(expand),
-        #     self.activation,
-        #     nn.Dropout(0.2)
+#         # self.linear2 = nn.Sequential(   nn.Linear(expand , expand,  ),
+#         #                              nn.LayerNorm(expand),
+#         #     self.activation,
+#         #     nn.Dropout(0.2)
      
-        # )
+#         # )
 
-        units = num_leads*expand#
-        unit_out = 128 # 64
-        # Fully connected layers
-        self.layer_norm = nn.LayerNorm(  units )  # Adjust input size based on conv output
-        self.fc1 = nn.Linear(units, unit_out )  # Adjust input size based on conv output
-        self.fc2 = nn.Linear(unit_out, num_classes)
-        self.dropout = nn.Dropout(0.7)
-        self.flatten = nn.Flatten()
-
-   
-    def forward(self, x):
-
-        # x = x.permute(0, 2, 1)  # Change shape to (batch_size,  input_dim, num_leads )
-
-        # print("4444444444444444444444")
-        # print(x.shape)
-
-        # print(f"Input shape: {x.shape}")  # Debugging line to check input shape
-
-
-        ### calculating adjencney matrix
-        a = x #* self.adj_linear
-   
-        # do sigmoid
-        # a =  self.activation(a )  # Normalize across features
-        #a = torch.sigmoid(a)
-
-        # .activation( a )
-
-        batch, C, F = x.shape
-
-        a_mean = torch.mean(a, dim=-1, keepdims=True)
-        a_std = torch.std(a, unbiased=True, dim=-1, keepdims=True)
-
-        a_centered = a -a_mean
+#         units = num_leads*expand#
+#         unit_out = 128 # 64
+#         # Fully connected layers
+#         self.layer_norm = nn.LayerNorm(  units )  # Adjust input size based on conv output
+#         self.fc1 = nn.Linear(units, unit_out )  # Adjust input size based on conv output
+#         self.fc2 = nn.Linear(unit_out, num_classes)
+#         self.dropout = nn.Dropout(0.7)
+#         self.flatten = nn.Flatten()
 
    
-        # 3. covariance
-        #    (use F−1 if you set unbiased=True above so that denominator matches)
-        # cov = a_centered @ a_centered.transpose(1, 2) / (F - 1)   # → [batch, C, C]
+#     def forward(self, x):
 
-        cov = (a_centered.cpu() @ a_centered.transpose(1, 2).cpu()) / (F - 1)
+#         # x = x.permute(0, 2, 1)  # Change shape to (batch_size,  input_dim, num_leads )
+
+#         # print("4444444444444444444444")
+#         # print(x.shape)
+
+#         # print(f"Input shape: {x.shape}")  # Debugging line to check input shape
+
+
+#         ### calculating adjencney matrix
+#         a = x #* self.adj_linear
+   
+#         # do sigmoid
+#         # a =  self.activation(a )  # Normalize across features
+#         #a = torch.sigmoid(a)
+
+#         # .activation( a )
+
+#         batch, C, F = x.shape
+
+#         a_mean = torch.mean(a, dim=-1, keepdims=True)
+#         a_std = torch.std(a, unbiased=True, dim=-1, keepdims=True)
+
+#         a_centered = a -a_mean
+
+   
+#         # 3. covariance
+#         #    (use F−1 if you set unbiased=True above so that denominator matches)
+#         # cov = a_centered @ a_centered.transpose(1, 2) / (F - 1)   # → [batch, C, C]
+
+#         cov = (a_centered.cpu() @ a_centered.transpose(1, 2).cpu()) / (F - 1)
    
 
-        # 4. outer product of stds
-        var_outer = a_std.cpu() @ a_std.transpose(1, 2).cpu()               # → [batch, C, C]
+#         # 4. outer product of stds
+#         var_outer = a_std.cpu() @ a_std.transpose(1, 2).cpu()               # → [batch, C, C]
 
-        # 5. correlation matrix
-        corr = cov / (var_outer + 1e-8)                              # → [batch, C, C]
+#         # 5. correlation matrix
+#         corr = cov / (var_outer + 1e-8)                              # → [batch, C, C]
 
-        corr = corr.to(x.device)  
-        # print(torch.min(corr) )
-        # corr     = corr - corr.min()
-        corr     = torch.relu(corr ) #+ torch.eye(12).to(DEVICE) # Normalize to [0, 1]
-        # print(corr)
+#         corr = corr.to(x.device)  
+#         # print(torch.min(corr) )
+#         # corr     = corr - corr.min()
+#         corr     = torch.relu(corr ) #+ torch.eye(12).to(DEVICE) # Normalize to [0, 1]
+#         # print(corr)
 
 
-        corr = corr/( torch.sum(corr, dim=-1, keepdim=True) +1e-6 ) # Normalize across features
+#         corr = corr/( torch.sum(corr, dim=-1, keepdim=True) +1e-6 ) # Normalize across features
 
      
 
-        # # 6. graph‐Laplace normalization
-        deg = torch.sum(corr, axis=-1)                              # → [batch, C]
+#         # # 6. graph‐Laplace normalization
+#         deg = torch.sum(corr, axis=-1)                              # → [batch, C]
 
-        norm_deg = torch.diag_embed( 1.0 / torch.sqrt(deg) + 1e-8 )
-
-   
-        norm_adj = torch.matmul(norm_deg, torch.matmul(corr, norm_deg) )
-
-
-        A_k = torch.linalg.matrix_power(norm_adj, 1 )
-
-        # print( A_k )
-
-        z = torch.matmul( A_k, x )
-        x = self.gnn1(z) # batch size x channels x features
-
-        # x = self.linear1(x)
-
-        # x = self.cnn(x)
-
-        # # x = torch.matmul( A_k, x )
-        # # x = self.gnn2(x) # batch size x channels x features
-
-
-        # # # # # second gnn layer
-        # z = torch.matmul( norm_adj, x )
-        # x = self.gnn2(z)
-
-        # # x = self.linear1(x) # batch size x channels x features
-        # # x = self.linear2(x) # batch size x channels x features
+#         norm_deg = torch.diag_embed( 1.0 / torch.sqrt(deg) + 1e-8 )
 
    
+#         norm_adj = torch.matmul(norm_deg, torch.matmul(corr, norm_deg) )
 
 
+#         A_k = torch.linalg.matrix_power(norm_adj, 1 )
+
+#         # print( A_k )
+
+#         z = torch.matmul( A_k, x )
+#         x = self.gnn1(z) # batch size x channels x features
+
+#         # x = self.linear1(x)
+
+#         # x = self.cnn(x)
+
+#         # # x = torch.matmul( A_k, x )
+#         # # x = self.gnn2(x) # batch size x channels x features
 
 
-        # #x, _ = torch.max(x, dim=1)  # Aggregate across leads (channels)
-   
+#         # # # # # second gnn layer
+#         # z = torch.matmul( norm_adj, x )
+#         # x = self.gnn2(z)
 
-        # ## x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
-        # ## x = self.conv1(x)
-        # ## x = self.conv2(x)
-   
-        x = self.flatten(x)  # Flatten the output for fully connected layers
-   
-        x = self.layer_norm(x)
-        x = self.fc1(x)
-        x = self.activation(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
-   
-        return x
-   
-class transformer(nn.Module):
-    def __init__(self, input_dim=30, num_leads=12, num_classes=2):
-        super(transformer, self).__init__()
-
-        # temp = input_dim
-        # input_dim = num_leads
-        # num_leads = temp
-
-        self.input_dim = input_dim
-        self.num_leads = num_leads
-        self.num_classes = num_classes
-
-        self.activation = nn.ReLU()
-
-        self.transformer = nn.TransformerEncoderLayer(d_model=input_dim, nhead=4,
-                                           batch_first=True, dim_feedforward = 2*input_dim , activation=self.activation )
-
-   # # )
-
-        units = num_leads*input_dim #
-        unit_out = 128 # 64
-        # Fully connected layers
-        self.layer_norm = nn.LayerNorm(  units )  # Adjust input size based on conv output
-        self.fc1 = nn.Linear(units, unit_out )  # Adjust input size based on conv output
-        self.fc2 = nn.Linear(unit_out, num_classes)
-        self.dropout = nn.Dropout(0.7)
-        self.flatten = nn.Flatten()
+#         # # x = self.linear1(x) # batch size x channels x features
+#         # # x = self.linear2(x) # batch size x channels x features
 
    
-    def forward(self, x):
+
+
+
+
+#         # #x, _ = torch.max(x, dim=1)  # Aggregate across leads (channels)
+   
+
+#         # ## x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
+#         # ## x = self.conv1(x)
+#         # ## x = self.conv2(x)
+   
+#         x = self.flatten(x)  # Flatten the output for fully connected layers
+   
+#         x = self.layer_norm(x)
+#         x = self.fc1(x)
+#         x = self.activation(x)
+#         x = self.dropout(x)
+#         x = self.fc2(x)
+   
+#         return x
+   
+# class transformer(nn.Module):
+#     def __init__(self, input_dim=30, num_leads=12, num_classes=2):
+#         super(transformer, self).__init__()
+
+#         # temp = input_dim
+#         # input_dim = num_leads
+#         # num_leads = temp
+
+#         self.input_dim = input_dim
+#         self.num_leads = num_leads
+#         self.num_classes = num_classes
+
+#         self.activation = nn.ReLU()
+
+#         self.transformer = nn.TransformerEncoderLayer(d_model=input_dim, nhead=4,
+#                                            batch_first=True, dim_feedforward = 2*input_dim , activation=self.activation )
+
+#    # # )
+
+#         units = num_leads*input_dim #
+#         unit_out = 128 # 64
+#         # Fully connected layers
+#         self.layer_norm = nn.LayerNorm(  units )  # Adjust input size based on conv output
+#         self.fc1 = nn.Linear(units, unit_out )  # Adjust input size based on conv output
+#         self.fc2 = nn.Linear(unit_out, num_classes)
+#         self.dropout = nn.Dropout(0.7)
+#         self.flatten = nn.Flatten()
 
    
-        x = self.transformer(x)
+#     def forward(self, x):
+
    
-        x = self.flatten(x)  # Flatten the output for fully connected layers
+#         x = self.transformer(x)
    
-        x = self.layer_norm(x)
-        x = self.fc1(x)
-        x = self.activation(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
+#         x = self.flatten(x)  # Flatten the output for fully connected layers
    
-        return x
+#         x = self.layer_norm(x)
+#         x = self.fc1(x)
+#         x = self.activation(x)
+#         x = self.dropout(x)
+#         x = self.fc2(x)
+   
+#         return x
 
 class conv_model(nn.Module):
     def __init__(self, input_dim=6, num_leads=12, num_classes=2):
@@ -380,10 +379,10 @@ class conv_model(nn.Module):
         self.input_dim = input_dim
         self.num_leads = num_leads
         self.num_classes = num_classes
-   
+        
         self.conv1_layer = nn.Conv2d(1, 32, kernel_size=(3, 1), stride=1)
         self.conv2_layer = nn.Conv2d(32, 64, kernel_size=(3, 1), stride=1)
-   
+        
         #make conv1 as a sequential layer
         self.conv1 = nn.Sequential(
             self.conv1_layer,
@@ -407,7 +406,7 @@ class conv_model(nn.Module):
         self.dropout = nn.Dropout(0.7)
         self.flatten = nn.Flatten()
 
-   
+        
     def forward(self, x):
         x = x.unsqueeze(1)  # Add channel dimension: (batch_size, 1, num_leads, input_dim)
         x = self.conv1(x)
@@ -418,7 +417,7 @@ class conv_model(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
-   
+        
         return x
 
 
@@ -435,7 +434,7 @@ def normalize_signal(signal):
         # Handle the case of a flat signal to avoid division by zero
         return np.zeros_like(signal)
 
-
+ 
 
 
 def process_single_lead(lead_data, lead_idx, original_fs, desired_sampling_rate, expected_length,
@@ -1202,6 +1201,8 @@ def optimizer_scheduler(optimizer, initial_lr, ep):
 
 
 
+
+
 def train_model(data_folder, model_folder, verbose):
     """
     Train a model using the data in the data_folder and save it in the model_folder.
@@ -1326,10 +1327,10 @@ def train_model(data_folder, model_folder, verbose):
 
         # # # # # ################################################################################################
         # # # # # # Optionally save/load features to avoid reprocessing
-        # np.savez("fold_2_training_features_new_val_12.npz", X_train_features=X_train_features, y_train=y_train, sources=sources)
+        # np.savez("fold_2_training_features_new_val_12_100Hz.npz", X_train_features=X_train_features, y_train=y_train, sources=sources)
    
     else:
-        data = np.load("fold_2_training_features_new_val_12.npz", allow_pickle=True)
+        data = np.load("fold_2_training_features_new_val_12_100Hz.npz", allow_pickle=True)
 
         # feat_idx = [ i for i in range(len( feature_names) ) if feature_names[i] in desired_feat ]
         X_train_features = data['X_train_features']#[:, :, feat_idx]  # Ensure we only take the first 12 leads
@@ -1338,6 +1339,8 @@ def train_model(data_folder, model_folder, verbose):
         y_train = data['y_train']
    
         sources = data['sources']
+
+
    
 
     # feature_names = [
@@ -1509,17 +1512,35 @@ def train_model(data_folder, model_folder, verbose):
 
 
 
-    ### Imputation of missing values
-    shape_original_train =  X_train.shape
+    ### Lead-wise median imputation with saving imputers
+    print("Applying lead-wise median imputation...")
+    shape_original_train = X_train.shape
     shape_original_val = X_val.shape
-    # imputer = KNNImputer(n_neighbors=7)
-    imputer = SimpleImputer(missing_values=np.nan, strategy='median')
 
-    # print( X_val.shape )
-    X_train = imputer.fit_transform( X_train.reshape(-1, shape_original_train[1]*shape_original_train[2] ) ).reshape( shape_original_train )
+    # Store imputers for each lead
+    lead_imputers = []
 
-    X_val = imputer.transform( X_val.reshape(-1, shape_original_val[1]*shape_original_val[2] ) ).reshape( shape_original_val )
+    for lead_idx in range(shape_original_train[1]):  # For each of the 12 leads
+        print(f"Processing lead {lead_idx + 1}/12...")
+        
+        # Extract data for this specific lead
+        lead_train_data = X_train[:, lead_idx, :]  # Shape: (samples, features)
+        lead_val_data = X_val[:, lead_idx, :]      # Shape: (samples, features)
+        
+        # Create and fit imputer for this lead
+        lead_imputer = IterativeImputer( random_state=0, max_iter=10 ) #SimpleImputer(missing_values=np.nan, strategy='median')
+        X_train[:, lead_idx, :] = lead_imputer.fit_transform(lead_train_data)
+        X_val[:, lead_idx, :] = lead_imputer.transform(lead_val_data)
+        
+        # is there are nan values
+        print(f"Lead {lead_idx + 1} - NaN values in training set: {np.isnan(X_train[:, lead_idx, :]).any()}")
 
+
+        # Store the imputer for this lead
+        lead_imputers.append(lead_imputer)
+
+    # Store all lead imputers (you'll need this for prediction)
+    imputer = lead_imputers  # Use this instead of the single imputer
 
    
     print(f"Training set: {len(y_train_split)} samples ({np.sum(y_train_split == 0)} class 0, {np.sum(y_train_split == 1)} class 1)")
@@ -1527,6 +1548,10 @@ def train_model(data_folder, model_folder, verbose):
 
     print(f"X_train shape: {X_train.shape}")  # Should be (num_samples, 12, 6)
    
+    # print for nans
+    print(f"NaN values in training set: {np.isnan(X_train).any()}")
+    print(f"NaN values in validation set: {np.isnan(X_val).any()}")
+
     # Scale features - be careful to preserve the shape
     print("Starting scaling...")
     # Reshape for scaling, fitting on training data only
@@ -1561,610 +1586,163 @@ def train_model(data_folder, model_folder, verbose):
      
     )
    
-   
+    
+    train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=256, shuffle=False)
+
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Input dimension is number of features per lead (6)
     feature_per_lead = X_train.shape[2]  # Should be 6
-
-    print(f"Input dimension per lead: {feature_per_lead}")
-   
+    
     # Create model
-    # model = gnn_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
- 
+    model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
+                                       
+    # Class weights calculation based on training split
+    num_0s = np.sum(y_train_split == 0)
+    num_1s = np.sum(y_train_split == 1)
+    class_weights_0 = torch.tensor([1.0, num_0s/num_1s], dtype=torch.float32).to(DEVICE)
+    print(f"Class weights: {class_weights_0}")
+    
+    focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean', 
+                           task_type='multi-class', num_classes=NUM_CLASSES).to(DEVICE)
+    criterion = focal_loss.to(DEVICE)
 
-    # model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
-
-
-    # # Class weights calculation based on training split
-    # num_0s = np.sum(y_train_split == 0)
-    # num_1s = np.sum(y_train_split == 1)
-    # class_weights_0 = torch.tensor([1.0, num_0s/num_1s], dtype=torch.float32).to(DEVICE)
-    # print(f"Class weights: {class_weights_0}")
-   
-    # # crossE_loss = nn.CrossEntropyLoss(class_weights_0).to(DEVICE)
-    # # criterion = crossE_loss.to(DEVICE)
-   
-    # focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean',
-    #            task_type='multi-class', num_classes=NUM_CLASSES ).to(DEVICE)
-    # criterion = focal_loss.to(DEVICE)
-
-    # # # Create a 2x2 weight matrix that matches the challenge metric
-    # # # Example: Challenge metric values for [[TN, FP], [FN, TP]]
-    # weight_matrix = torch.tensor([
-    #     [0.0, -2.0],  # Penalties for actual negative class (TN FP)
-    #     [-0.0, 0.3 ]   # Penalties for actual positive class (FN TP)
-    # ], dtype=torch.float32).to(DEVICE)
-
-    # # Initialize CMLoss with this weight matrix
-    # cm_loss_fn = CMLoss(weight_matrix=weight_matrix).to(DEVICE)
-
-
-    # optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE )#, weight_decay=  1e-2 )
-    # optimizer = optim.SGD( model.parameters(), lr=LEARNING_RATE,
-                        #    momentum=0.9, weight_decay=1e-4 )#, weight_decay=  1e-2 )
-
-    # total_steps = len(train_dataloader) * EPOCHS
-    # scheduler = get_cosine_schedule_with_warmup(optimizer,
-                                            # num_warmup_steps=EPOCHS*.1, num_training_steps=EPOCHS)
-
-   
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-5)
-   
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0 =2, T_mult = 2)
-
-    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
-
-   
-    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    #     optimizer,
-    #     max_lr= LEARNING_RATE,
-    #     epochs=EPOCHS,
-    #     steps_per_epoch=len(train_dataloader),
-    #     div_factor=25,
-    #     final_div_factor=1e4,
-    #     pct_start=0.1,
-    #     anneal_strategy='cos',
-    # )
-
-    # total_steps = len(train_dataloader) * EPOCHS
-    # scheduler = optim.lr_scheduler.CosineAnnealingLR(
-    #     optimizer,
-    #     T_max= EPOCHS,   # total number of epochs before LR reaches η_min
-    #     eta_min=1e-6
-    # )
-
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.1)
+    total_steps = EPOCHS * len(train_dataloader)
+    scheduler = OneCycleLR(
+    optimizer,
+    max_lr=LEARNING_RATE,
+    total_steps=total_steps,
+    pct_start=0.1,      # First 10% for warmup
+    div_factor=25,      # Initial LR = max_lr/25
+    final_div_factor=1e4  # Final LR = max_lr/10000
+)
     if verbose:
         print('Starting training...')
     print("without penality")
     # Track best validation challenge score
     best_challenge_score = -1.0
-    best_F1 = -1.0
     patience = 50  # Number of epochs to wait for improvement
     patience_counter = 0
-   
-   
-
-
- 
-
-    # ###################################################################
-   
-
-    # EPOCHS =   150 # 300 #
-
-    LEARNING_RATE =   1e-4 # 1e-4 # 5e-4# 0.0001 *8 # # it was 0.001 for transformer
-    weight_decay= 1e-2
- 
-   
-
-    # snap = np.array( [ 2,   6,    14    ,30   ,62,  126 ] ) -1
-    snap = np.array( [  30, 60, 90, 120, 150, 180, 210, 240, 270, 300  ] ) -1
-    # snap = np.array( [ 30,  70, 150, 310  ] ) -1
-   
-    # snap = np.array( [ 30,  90, 210 ] ) -1
-
-   
-    # optimizer = optim.SGD(model.parameters(), lr=1e-2, weight_decay=1e-4 )
-
-    batch_size = 256 # 32
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Class weights calculation based on training split
-    num_0s = np.sum(y_train_split == 0)
-    num_1s = np.sum(y_train_split == 1)
-    class_weights_0 = torch.tensor([1.0, num_0s/num_1s],
-                                    dtype=torch.float32).to(DEVICE)
-    print(f"Class weights: {class_weights_0}")
-   
-    crossE_loss = nn.CrossEntropyLoss(class_weights_0).to(DEVICE)
-    criterion_CE = crossE_loss.to(DEVICE)
-   
-    focal_loss = FocalLoss(gamma=2, alpha=class_weights_0, reduction='mean',
-                        task_type='multi-class', num_classes=NUM_CLASSES ).to(DEVICE)
-    criterion = focal_loss.to(DEVICE)
-
-    # # Create a 2x2 weight matrix that matches the challenge metric
-    # # Example: Challenge metric values for [[TN, FP], [FN, TP]]
-    weight_matrix = torch.tensor([
-        [0.0, -2.0],  # Penalties for actual negative class (TN FP)
-        [-0.0, 0.3 ]   # Penalties for actual positive class (FN TP)
-    ], dtype=torch.float32).to(DEVICE)
-
-    # Initialize CMLoss with this weight matrix
-    cm_loss_fn = CMLoss(weight_matrix=weight_matrix).to(DEVICE)
-   
-    reps = 3
-
-    # snapshots_global = []
-    # snapshot_scores_global = []
-    for rep in range(reps):
-
-        lossTurn =   False
-
-        snapshots = []
-        snapshot_scores = []
-
-   
-
-        print(f'Repetition {rep}')
-
-   
-   
-
-        if rep == 0:
-            # do cnn
-            model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
+    
+    # Import the official challenge score function
+    from helper_code import compute_challenge_score
+    
+    for epoch in range(EPOCHS):
+        print(f'Epoch {epoch+1}/{EPOCHS}')
+        
+        # Training phase
+        model.train()
+        epoch_loss = 0.0
+        all_train_predictions = []
+        all_train_labels = []
+        
+        for batch_features, batch_labels in train_dataloader:
+            batch_features = batch_features.to(DEVICE)
+            batch_labels = batch_labels.to(DEVICE)
             
-            EPOCHS =   180
-            snap = np.array( [  30, 60, 90, 120, 150, 180, 210, 240, 270, 300  ] ) -1
+            optimizer.zero_grad()
+            outputs = model(batch_features)
+            f_loss = criterion(outputs, batch_labels)
+            scores = F.softmax(outputs, dim=1)[:, 1] 
+            ranking_loss = ranking_hinge_loss(scores, batch_labels, margin=2.0, num_pairs=10000)
 
-            optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay )
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
-                                                                        T_0 =30, T_mult = 1 )
+
+            loss = f_loss + (1 * ranking_loss) 
+     
             
-            model_name = "CNN"
-            print('Model CNN')
-        elif rep == 1:
-            # do gnn
-            model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
-       
-           
-            EPOCHS =   310
-            snap = np.array( [ 30, 70, 150, 310  ] ) -1
-
-            optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay )
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
-                                                                        T_0 =10, T_mult = 2 )
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
             
-            model_name = "GNN"
-            print('Model GNN')
-        elif rep == 2:
-            #do transformer
-            model = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
-       
+            epoch_loss += loss.item() * batch_features.size(0)
+            _, predicted = torch.max(outputs, 1)
+            all_train_predictions.extend(predicted.cpu().numpy())
+            all_train_labels.extend(batch_labels.cpu().numpy())
 
-            EPOCHS =   126 # 254
-            snap = np.array( [ 30, 62, 126, 254  ] ) -1
-
-            optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay )
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
-                                                                        T_0 =2, T_mult = 2 )
-            
-            model_name = "Transformer"
-            print('Model transfomer')
-
-   
-        # optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay )
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
-                                                                        #  T_0 =30, T_mult = 1)
-   
-   
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
-        #                                                                 T_0 =30, T_mult = 1 )
-
-   
-        for epoch in range( EPOCHS):
-            print(f'Epoch {epoch+1}/{EPOCHS}')
-
-       
-            # Training phase
-            model.train()
-            epoch_loss = 0.0
-            all_train_predictions = []
-            all_train_labels = []
-   
-       
-            for batch_features, batch_labels in train_dataloader:
-
-
-                batch_features = batch_features.to(DEVICE)
-                batch_labels = batch_labels.to(DEVICE)
-   
-   
-                optimizer.zero_grad()
-
-   
-                outputs  = model(batch_features  )
-                probabilities = F.softmax(outputs, dim=1)
-       
-                # print( batch_labels_all.shape, logits_all.shape )
-   
-                all_train_labels.extend(batch_labels.cpu().numpy())
-
-                if lossTurn:
-                    # f_loss = criterion_CE(outputs, batch_labels) #
-                    f_loss = criterion(outputs, batch_labels)
-   
-                    scores = F.softmax(outputs, dim=1)[:, 1]
-                    # Compute ranking hinge loss
-                    ranking_loss = ranking_hinge_loss(scores, batch_labels, margin=2.0, num_pairs=10000)
-
-                    loss =    f_loss + ( ranking_loss)
-
-                else:
-
-                    one_hot_labels = F.one_hot(batch_labels, num_classes=NUM_CLASSES).float()
-                    cm_loss = cm_loss_fn(outputs, one_hot_labels)  # Pass one-hot labels instead of class indices
-
-
-                    loss =   cm_loss
-
-
-                loss.backward()
-
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-
-                optimizer.step()
-       
-   
-                epoch_loss += loss.item() * batch_features.size(0)
-   
-   
-                predicted = torch.argmax( probabilities, dim=1)
-
-                all_train_predictions.extend( predicted.cpu().numpy())
-   
-
-   
-            # Compute training metrics
-            epoch_loss /= len(train_dataset)
-            train_accuracy = (torch.tensor(all_train_predictions) == torch.tensor(all_train_labels)).sum().item() / len(all_train_labels)
-            train_f1 = f1_score(all_train_labels, all_train_predictions )
-
-       
-
-            for i, pg in enumerate(optimizer.param_groups):
-                lr = pg['lr']
-
-            print(f'current learning rate :{lr}')
-
-            scheduler.step()  # Update learning rate after each epoch
-       
-       
-            print(f'Training - Loss: {epoch_loss:.4f}, Accuracy: {train_accuracy:.4f}, F1 Score: {train_f1:.4f}   ')
-   
-                #, Domain Score: {domainSource:.4f} target: {domainTarget:.4f}')
-       
-            # Validation phase
-            model.eval()
-            val_predictions = []
-            val_probabilities = []
-            val_ground_truth = []
-       
-            with torch.no_grad():
-                for batch_features, batch_labels in val_dataloader:
-                    batch_features = batch_features.to(DEVICE)
-                    batch_labels = batch_labels.to(DEVICE)
-   
-       
-                    outputs  = model( batch_features )
-
-                    # outputs, _ = model(batch_features, 0.0 )
-                    probabilities =  F.softmax(outputs, dim=1)
-       
-                    predicted = torch.argmax(probabilities, dim=1)
-                    # _, predicted = torch.max(outputs, 1)
-       
-                    val_predictions.extend(predicted.cpu().numpy())
-                    val_probabilities.extend(probabilities[:, 1].cpu().numpy())  # Probability for positive class
-                    val_ground_truth.extend(batch_labels.cpu().numpy())
-       
-            # Compute validation metrics
-            val_accuracy = (torch.tensor(val_predictions) == torch.tensor(val_ground_truth)).sum().item() / len(val_ground_truth)
-            val_f1 = f1_score(val_ground_truth, val_predictions )
-       
-            # Calculate challenge score on validation set
-            # Use fewer permutations during training for speed
-
-            print(f'Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}' ) #, Challenge Score: {val_challenge_score:.4f}')
-
-            if epoch in snap:
-                val_challenge_score = compute_challenge_score(
-                    val_ground_truth,
-                    val_probabilities,
-                    num_permutations=10**4  # Reduced from 10^4 for faster computation during training
-                )
-
-                snapshot_scores.append( val_challenge_score )
-   
-   
-                # save weights
-                snapshot = {k: v.clone() for k, v in model.state_dict().items()}
-                snapshots.append( (epoch, snapshot) )
-
-                # snapshots_global.append( (rep, epoch, snapshot.copy()) )
-                # snapshot_scores_global.append( val_challenge_score.copy() )
-
-                #change loss for next model
-                # if epoch == 59:
-                #     lossTurn = not lossTurn
-                lossTurn = not lossTurn
-
-       
-        del optimizer, scheduler    
-
-        # after all
-        _, first_weights = snapshots[0]
-        avg_weights = {k: v.clone() for k, v in first_weights.items()}
-        for v in avg_weights.values():
-            v.zero_()
-
-        num_snapshots = len(snapshots)
-
-        idx_model = 0
-        for _, state_dict in snapshots:
-            for k, v in state_dict.items():
-       
-            # temp = v.clone().float()*snapshot_scores[idx_model]
-                # print( v.dtype, snapshot_scores[idx_model].dtype, temp.dtype )
-                # avg_weights[k] += temp.to( v.dtype)
-                avg_weights[k] = avg_weights[k] + v*snapshot_scores[idx_model]
-                # print( v.dtype, avg_weights[k].dtype )
-            idx_model += 1
-
-        print(f'scores :{snapshot_scores}')
-        snapshot_scores = np.array(snapshot_scores)
-        totalWeight = np.sum( snapshot_scores )
-
-   
-        for v in avg_weights.values():
-            v = v / totalWeight # num_snapshots
-
-
-   
-        model.load_state_dict(avg_weights)
-   
-        print("after averaging")
-
-        # # Save the model
-   
+        # Compute training metrics
+        epoch_loss /= len(train_dataset)
+        train_accuracy = (torch.tensor(all_train_predictions) == torch.tensor(all_train_labels)).sum().item() / len(all_train_labels)
+        train_f1 = f1_score(all_train_labels, all_train_predictions)
+        
+        print(f'Training - Loss: {epoch_loss:.4f}, Accuracy: {train_accuracy:.4f}, F1 Score: {train_f1:.4f}')
+        
         # Validation phase
         model.eval()
         val_predictions = []
         val_probabilities = []
         val_ground_truth = []
-   
+        
         with torch.no_grad():
             for batch_features, batch_labels in val_dataloader:
                 batch_features = batch_features.to(DEVICE)
                 batch_labels = batch_labels.to(DEVICE)
-   
-   
-                outputs  = model( batch_features )
-
-                # outputs, _ = model(batch_features, 0.0 )
-                probabilities =  F.softmax(outputs, dim=1)
-   
-                predicted = torch.argmax(probabilities, dim=1)
-                # _, predicted = torch.max(outputs, 1)
-   
+                
+                outputs = model(batch_features)
+                probabilities = F.softmax(outputs, dim=1)
+                
+                _, predicted = torch.max(outputs, 1)
+                
                 val_predictions.extend(predicted.cpu().numpy())
                 val_probabilities.extend(probabilities[:, 1].cpu().numpy())  # Probability for positive class
                 val_ground_truth.extend(batch_labels.cpu().numpy())
-   
+        
         # Compute validation metrics
         val_accuracy = (torch.tensor(val_predictions) == torch.tensor(val_ground_truth)).sum().item() / len(val_ground_truth)
-        val_f1 = f1_score(val_ground_truth, val_predictions )
-   
+        val_f1 = f1_score(val_ground_truth, val_predictions)
+        
         # Calculate challenge score on validation set
         # Use fewer permutations during training for speed
         val_challenge_score = compute_challenge_score(
-            val_ground_truth,
+            val_ground_truth, 
             val_probabilities,
             num_permutations=10**4  # Reduced from 10^4 for faster computation during training
         )
 
-   
-        save_model(model_folder, model, scaler, imputer, val_challenge_score, model_name=model_name )
-   
-   
-        print(f'Final Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}, Challenge Score: {val_challenge_score:.4f}')
-   
-        del model
-
-    # pred_snaps = np.concatenate( pred_snaps, axis=0)
-    # pred_snaps = np.mean( pred_snaps, axis=0)
-
-    model = load_model(model_folder, verbose)
-
-    m1 = model[0]
-    m2 = model[1]
-    m3 = model[2]
-
-    score1 = m1.val_challenge_score
-    score2 = m2.val_challenge_score
-    score3 = m3.val_challenge_score
-
-
-    weights = score1+score2+score3
-
-    score1 /= weights
-    score2 /= weights
-    score3 /= weights
-
-    score1 = torch.from_numpy(score1)
-    score2 = torch.from_numpy(score2)
-    score3 = torch.from_numpy(score3)
-
-    print( score1, score2, score3 )
-   
-
-    m1.eval()
-    m2.eval()
-    m3.eval()
-
-    del avg_weights
-
-    # after all
-    # print(f'scores global:{snapshot_scores_global}')
-    # snapshots_global = snapshots_global#[:7]
-    # snapshot_scores_global = snapshot_scores_global#[:7]
-
-    # _, _, first_weights = snapshots_global[0]
-    # avg_weights = {k: v.clone() for k, v in first_weights.items()}
-    # for v in avg_weights.values():
-    #     v.zero_()
-
+        
+        print(f'Validation - Accuracy: {val_accuracy:.4f}, F1 Score: {val_f1:.4f}, Challenge Score: {val_challenge_score:.4f}')
+        
+        # Save model if challenge score improves
+        if val_challenge_score > best_challenge_score:
+            best_challenge_score = val_challenge_score
+            patience_counter = 0
+            print(f"New best challenge score: {best_challenge_score:.4f}, saving model...")
+            
+            # Save the model
+            os.makedirs(model_folder, exist_ok=True)    
+            save_model(model_folder, model, scaler, imputer)
+        else:
+            patience_counter += 1
+            print(f"Challenge score did not improve. Patience: {patience_counter}/{patience}")
+            
+            if patience_counter >= patience:
+                print(f"Early stopping after {patience} epochs without improvement")
+                break
+        print(f"Best validation challenge score so far: {best_challenge_score:.4f}")
+        if torch.isnan(loss):
+            print(f"WARNING: Loss became NaN at epoch {epoch+1}")
+            print("Last batch details:")
+            print(f"  - Focal loss: {f_loss.item() if not torch.isnan(f_loss) else 'NaN'}")
+            print(f"  - Ranking loss: {ranking_loss.item() if not torch.isnan(ranking_loss) else 'NaN'}")
+            
+            # If we have a good model already, just use it
+            if best_challenge_score > 0.3:
+                print(f"Using previously saved model with score: {best_challenge_score:.4f}")
+                break
+            else:
+                # No good model yet, but training has become unstable
+                print(f"No good model found yet (best: {best_challenge_score:.4f}). Training is unstable.")
+                print("Restarting from the latest checkpoint with lower learning rate might help.")
+                break  # It's usually better to break and restart with different settings
   
-    # idx_model = 0
-    # for _, _, state_dict in snapshots_global:
-    #     for k, v in state_dict.items():
-    #         avg_weights[k] = avg_weights[k] + v*snapshot_scores_global[idx_model]
-    #     idx_model += 1
-
-    
-    # snapshot_scores_global = np.array(snapshot_scores_global)
-    # totalWeight = np.sum( snapshot_scores_global )
-    # print(f'scores totalWeight:{totalWeight}')
-
-    # for v in avg_weights.values():
-    #     v = v / totalWeight
-    #     # print( v )
-
-
-    # model2 = conv_model(input_dim=feature_per_lead, num_leads=X_train.shape[1], num_classes=NUM_CLASSES).to(DEVICE)
-    # model2.load_state_dict(avg_weights)
-    # model2.eval()
-
-    val_predictions = []
-    val_probabilities = []
-    val_ground_truth = []
-    # val_probabilities_g = []
-   
-    with torch.no_grad():
-        for batch_features, batch_labels in val_dataloader:
-            batch_features = batch_features.to(DEVICE)
-            batch_labels = batch_labels.to(DEVICE)
-       
-       
-            outputs1  = m1( batch_features )
-            outputs2  = m2( batch_features )
-            outputs3  = m3( batch_features )
-
-            # outputs_g = model2( batch_features )
-
-            # outputs, _ = model(batch_features, 0.0 )
-            probabilities1 =  F.softmax(outputs1, dim=1)
-            probabilities2 =  F.softmax(outputs2, dim=1)
-            probabilities3 =  F.softmax(outputs3, dim=1)
-
-            # probabilities_g =  F.softmax(outputs_g, dim=1)
-       
-       
-            probabilities = score1*probabilities1[:,1] + score2*probabilities2[:,1] + score3*probabilities3[:,1]
-       
-            val_probabilities.extend(probabilities.cpu().numpy())  # Probability for positive class
-            val_ground_truth.extend(batch_labels.cpu().numpy())
-
-            # val_probabilities_g.extend(probabilities_g[:,1].cpu().numpy())  
-   
-    # Compute validation metrics
-   
-    # Calculate challenge score on validation set
-    # Use fewer permutations during training for speed
-    val_challenge_score = compute_challenge_score(
-        val_ground_truth,
-        val_probabilities,
-        num_permutations=10**4  # Reduced from 10^4 for faster computation during training
-    )
-    if val_challenge_score < 0.3:
+    if best_challenge_score < 0.317:
         print("Warning: Best validation challenge score is below 0.3, indicating poor model performance.")
-        print(f"Best challenge score achieved: {val_challenge_score:.4f}")
-        raise ValueError("Model training did not achieve a satisfactory challenge score.")
+        print(f"Best challenge score achieved: {best_challenge_score:.4f}")
+        raise ValueError(f"Model training did not achieve a satisfactory challenge score {best_challenge_score}.")
     
-
-    print(f'Final Validation -  Challenge Score: {val_challenge_score:.4f}')
-
-    # val_challenge_score = compute_challenge_score(
-    #     val_ground_truth,
-    #     val_probabilities_g,
-    #     num_permutations=10**4  # Reduced from 10^4 for faster computation during training
-    # )
-
-    # print(f'Global Final Validation -  Challenge Score: {val_challenge_score:.4f}')
-   
-   
-   
-
-
-    # val_challenge_score = compute_challenge_score(
-    #     val_ground_truth,
-    #     pred_snaps,
-    #     num_permutations=10**4  # Reduced from 10^4 for faster computation during training
-    # )
-   
-    # print(f'average Challenge Score: {val_challenge_score:.4f}')
-
-
-
-        # # Save model if challenge score improves
-        # if (val_challenge_score > best_challenge_score) or ( val_challenge_score == best_challenge_score and val_f1 > best_F1 ) :
-        #     best_challenge_score = val_challenge_score
-        #     best_F1 = val_f1
-        #     patience_counter = 0
-        #     print(f"New best challenge score: {best_challenge_score:.4f}, saving model...")
-       
-        #     # Save the model
-        #     os.makedirs(model_folder, exist_ok=True)    
-        #     save_model(model_folder, model, scaler, imputer )
-        # else:
-        #     patience_counter += 1
-        #     print(f"Challenge score did not improve. Patience: {patience_counter}/{patience}")
-       
-        #     if patience_counter >= patience:
-        #         print(f"Early stopping after {patience} epochs without improvement")
-        #         break
-        # print(f"Best validation challenge score so far: {best_challenge_score:.4f}")
-        # if torch.isnan(loss):
-        #     print(f"WARNING: Loss became NaN at epoch {epoch+1}")
-        #     print("Last batch details:")
-        #     print(f"  - Focal loss: {f_loss.item() if not torch.isnan(f_loss) else 'NaN'}")
-        #     print(f"  - Ranking loss: {ranking_loss.item() if not torch.isnan(ranking_loss) else 'NaN'}")
-       
-        #     # If we have a good model already, just use it
-        #     if best_challenge_score > 0.3:
-        #         print(f"Using previously saved model with score: {best_challenge_score:.4f}")
-        #         break
-        #     else:
-        #         # No good model yet, but training has become unstable
-        #         print(f"No good model found yet (best: {best_challenge_score:.4f}). Training is unstable.")
-        #         print("Restarting from the latest checkpoint with lower learning rate might help.")
-        #         break  # It's usually better to break and restart with different settings
- 
+    print(f"Training complete. Best validation challenge score: {best_challenge_score:.4f}")
     
-   
-    #print(f"Training complete. Best validation challenge score: {best_challenge_score:.4f}")
-
-    # file_name = "val_score.txt"
-    # content = f"Best val set challenge score was {best_challenge_score}"
-
-    # with open(file_name, "w") as file:
-    #     file.write(content)
-   
     if verbose:
         print('Done.')
         print()
@@ -2172,212 +1750,135 @@ def train_model(data_folder, model_folder, verbose):
 def run_model(record, model, verbose):
     """
     Run a trained model on a record.
-   
+    
     Args:
         record: Path to the record
         model: Trained model
         verbose: Whether to print progress
-   
+    
     Returns:
         (binary_output, probability_output): Prediction and probability
     """
     if verbose:
         print(f'Processing record {record} for prediction...')
-   
+    
     # Extract features from the record
     features_array = load_and_process_signal_train(
-        record,
+        record, 
         desired_sampling_rate=100,
-        train=False
-    )
-   
+        train=False)
+    
+    # Apply lead-wise imputation
+    for lead_idx in range(features_array.shape[0]):  # For each lead
+        lead_data = features_array[lead_idx, :].reshape(1, -1)  # Shape: (1, features)
+        features_array[lead_idx, :] = model.lead_imputers[lead_idx].transform(lead_data)
+    
     # Apply scaling
     original_shape = features_array.shape
     features_flat = features_array.reshape(1, -1)  # Flatten for scaling
-    features_flat = np.nan_to_num(features_flat, nan=np.nan, posinf=np.nan, neginf=np.nan)
-
-    m1 = model[0]
-    m2 = model[1]
-    m3 = model[2]
-
-    score1 = m1.val_challenge_score
-    score2 = m2.val_challenge_score
-    score3 = m3.val_challenge_score
-
-
-    weights = score1+score2+score3
-
-    score1 /= weights
-    score2 /= weights
-    score3 /= weights
-
-    score1 = torch.from_numpy(score1).to(DEVICE)
-    score2 = torch.from_numpy(score2).to(DEVICE)
-    score3 = torch.from_numpy(score3).to(DEVICE)
-
-    features_imputed = m1.imputer.transform(features_flat)
-    features_scaled = m1.feature_scaler.transform(features_imputed)
-
+    features_scaled = model.feature_scaler.transform(features_flat)
     features_scaled = features_scaled.reshape(original_shape)  # Reshape back to (12, 6)
-   
+    
     # Convert to tensor and send to device
     features_tensor = torch.tensor(features_scaled, dtype=torch.float32).unsqueeze(0).to(DEVICE)
     # features_tensor shape: (1, 12, 6) - batch_size, num_leads, num_features
-   
+    
     # Run prediction
     with torch.no_grad():
-        # logits = model(features_tensor)
-
-        outputs1  = m1( features_tensor )
-        outputs2  = m2( features_tensor )
-        outputs3  = m3( features_tensor )
-
-        # outputs, _ = model(batch_features, 0.0 )
-        probabilities1 =  F.softmax(outputs1, dim=1)
-        probabilities2 =  F.softmax(outputs2, dim=1)
-        probabilities3 =  F.softmax(outputs3, dim=1)
-   
-   
-        probs = score1*probabilities1 + score2*probabilities2 + score3*probabilities3
-   
-        # print(probs)
-
-   
-        probs_cpu = probs.cpu().numpy()
-        pred_class = int(np.argmax(probs_cpu))
-
-        # print(pred_class)
-   
+        logits = model(features_tensor)
+        probs = F.softmax(logits, dim=1).cpu().numpy()
+        pred_class = int(np.argmax(probs))
+    
     binary_output = bool(pred_class)
     probability_output = float(probs[0, 1])  # Probability for the positive class
-   
+    
     if verbose:
         print(f'Prediction: {binary_output}, Probability: {probability_output:.4f}')
-   
+    
     return binary_output, probability_output
 
 def load_model(model_folder, verbose):
     """
     Load a trained model from a folder.
-   
+    
     Args:
         model_folder: Folder containing the saved model
         verbose: Whether to print progress
-   
+    
     Returns:
         model: Loaded model
     """
     if verbose:
         print('Loading model and features preprocessing components...')
-   
+    
     # Load the PyTorch model
-    model_path_cnn = os.path.join(model_folder, 'CNN.pth')
-    model_path_gnn = os.path.join(model_folder, 'GNN.pth')
-    model_path_transformer = os.path.join(model_folder, 'Transformer.pth')
-
-   
-
-    # if not os.path.exists(model_path):
-    #     model_path = os.path.join(model_folder, 'transformer_model.pt')  # Try alternative name
-   
+    model_path = os.path.join(model_folder, 'model.pth')
+    if not os.path.exists(model_path):
+        model_path = os.path.join(model_folder, 'transformer_model.pt')  # Try alternative name
+    
     # Load feature scaler
     feature_scaler_path = os.path.join(model_folder, 'feature_scaler.joblib')
     feature_scaler = joblib.load(feature_scaler_path)
-   
-    # Load feature medians for imputation
-    imputer_path = os.path.join(model_folder, 'imputer.pkl')
-    with open(imputer_path, 'rb') as f:
-        imputer = pickle.load(f)
-   
-   
-    # Create and load model
-    # model = gnn_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
-    model_1 = conv_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)  # Adjust input_dim and num_leads as needed
-    # model_2 = gnn_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
-    # model_3 = transformer(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
-
-    model_2 = conv_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
-    model_3 = conv_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
-
-    model_1.load_state_dict(torch.load(model_path_cnn, map_location=DEVICE))
-    model_2.load_state_dict(torch.load(model_path_gnn, map_location=DEVICE))
-    model_3.load_state_dict(torch.load(model_path_transformer, map_location=DEVICE))
-   
-    model_1.eval()
-    model_2.eval()
-    model_3.eval()
-
-    val_score1 = np.load(f'{model_folder}/CNN_scores.npz') ["score"]
-    val_score2 = np.load(f'{model_folder}/GNN_scores.npz') ["score"]
-    val_score3 = np.load(f'{model_folder}/Transformer_scores.npz') ["score"]
-
-   
-    feature_scaler_path = os.path.join(model_folder, 'feature_scaler.joblib')
-    scaler = joblib.load(feature_scaler_path)
-
-    imputer_path = os.path.join(model_folder, 'imputer.pkl')
-    with open(imputer_path, 'rb') as f:
-        imputer = pickle.load(f)
-
-
-
-    # checkpoint1 = torch.load(model_path_cnn, map_location=DEVICE)
-    # checkpoint2 = torch.load(model_path_gnn, map_location=DEVICE)
-    # checkpoint3 = torch.load(model_path_transformer, map_location=DEVICE)
-
-    # print( checkpoint1.keys() )
-    # # 5) Get your stored validation score
-    # val_score1 = checkpoint1.get("val_challenge_score", None) #["val_challenge_score"]
-    # val_score2 = checkpoint2.get("val_challenge_score", None) #["val_challenge_score"]
-    # val_score3 = checkpoint3.get("val_challenge_score", None) #["val_challenge_score"]
-
-    print( val_score1, val_score2, val_score3 )
-    # # 4) Restore your pre‐/post‐processors
-    # scaler  = checkpoint1.get("scaler", None)
-    # imputer = checkpoint1.get("imputer", None)
-
-   
-
-   
-    model_1.imputer = imputer
-    model_1.feature_scaler = scaler
-
-    model_1.val_challenge_score = val_score1
-    model_2.val_challenge_score = val_score2
-    model_3.val_challenge_score = val_score3
-
-   
-    model = [model_1, model_2, model_3]
+    
+    # Load lead-wise imputers (updated from feature_medians)
+    lead_imputers_path = os.path.join(model_folder, 'lead_imputers.joblib')
+    if os.path.exists(lead_imputers_path):
+        lead_imputers = joblib.load(lead_imputers_path)
+    else:
+        # Fallback to old method for backward compatibility
+        feature_medians_path = os.path.join(model_folder, 'feature_medians.pkl')
+        with open(feature_medians_path, 'rb') as f:
+            lead_imputers = pickle.load(f)
+    
+    # Create and load model - fix input_dim to match training (6, not 12)
+    model = conv_model(input_dim=12, num_leads=12, num_classes=NUM_CLASSES).to(DEVICE)
+    
+    if model_path.endswith('.pth'):
+        model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+    else:
+        checkpoint = torch.load(model_path, map_location=DEVICE)
+        model.load_state_dict(checkpoint['model_state_dict'])
+    
+    model.eval()
+    
+    # Store preprocessing components with the model
+    model.feature_scaler = feature_scaler
+    model.lead_imputers = lead_imputers  # Updated to use lead_imputers
+    
     if verbose:
         print('Model loaded successfully.')
+        print(f'Loaded {len(lead_imputers)} lead-wise imputers')
+    
     return model
 
-def save_model(model_folder, model, scaler, imputer, val_challenge_score, model_name ):
+def save_model(model_folder, model, scaler, imputer):
+    """
+    Save model and related components to the model folder.
+    
+    Args:
+        model_folder: Directory to save the model
+        model: PyTorch model
+        scaler: Feature scaler
+        feature_medians: Median values for feature imputation
+    """
     # Create directory if it doesn't exist
     os.makedirs(model_folder, exist_ok=True)
-   
+    
     # 1. Save the PyTorch model separately
-    torch.save(model.state_dict(), os.path.join(model_folder, f'{model_name}.pth'))
-   
-    # # 2. Save the scaler using joblib (better for scikit-learn objects)
+    torch.save(model.state_dict(), os.path.join(model_folder, 'model.pth'))
+    
+    # 2. Save the scaler using joblib (better for scikit-learn objects)
     joblib.dump(scaler, os.path.join(model_folder, 'feature_scaler.joblib'))
-   
+    
     # 3. Save feature medians using pickle
-    with open(os.path.join(model_folder, 'imputer.pkl'), 'wb') as f:
+    with open(os.path.join(model_folder, 'feature_medians.pkl'), 'wb') as f:
         pickle.dump(imputer, f)
-   
+    
     # 4. Also save a combined checkpoint for backward compatibility
     torch.save({
         'model_state_dict': model.state_dict(),
-     
-    }, os.path.join(model_folder, f'{model_name}.pt'))
-
-    #    'scaler': scaler,
-    #     'imputer': imputer,
-    #     'val_challenge_score': val_challenge_score
-   
-
-    np.savez(os.path.join(model_folder, f'{model_name}_scores.npz'), score = val_challenge_score)
-
-   
-    # print(f"Model and components saved to {model_folder}")
+        'scaler': scaler,
+        'feature_medians': imputer
+    }, os.path.join(model_folder, 'transformer_model.pt'))
+    
+    print(f"Model and components saved to {model_folder}")
