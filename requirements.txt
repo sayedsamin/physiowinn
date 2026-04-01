@@ -54,7 +54,7 @@ python-dateutil==2.9.0.post0
 # pywin32==308
 PyYAML==6.0.2
 pyzmq==26.2.1
-requests==2.32.3
+requests==2.33.0
 scikit-learn==1.6.1
 scipy==1.15.2
 seaborn==0.13.2
