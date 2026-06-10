@@ -68,7 +68,7 @@ stack-data==0.6.3
 sympy==1.13.1
 threadpoolctl==3.6.0
 --extra-index-url https://download.pytorch.org/whl/cu118
-torch==2.6.0
+torch==2.7.1+cu118
 neurokit2==0.2.11
 PyWavelets==1.8.0
 
